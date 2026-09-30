@@ -39,7 +39,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # The same configure flags as the official release in release.yml.
+      # The same configure flags as the official release in release.yml. The Dockerfile copies ffmpeg out of
+      # the build image, so pinning that image's index by digest keeps ffmpeg the same on every build.
       - name: Build and push the image
         run: |
           docker buildx build --platform linux/amd64 \
@@ -49,6 +50,7 @@ jobs:
             --label org.opencontainers.image.source=$SOURCE_URL \
             --label org.opencontainers.image.revision=$GITHUB_SHA \
             --annotation "index,manifest:org.opencontainers.image.source=$SOURCE_URL" \
+            --build-arg IMAGE=ossrs/srs:ubuntu20@sha256:5abc49d6f80ecbca6a60b0d6e605ecc93d13768903966ae7b912d1add6a9fc4e \
             --build-arg CONFARGS='--sanitizer=off --gb28181=on' \
             -f Dockerfile .
       - name: Write the digest to the summary
