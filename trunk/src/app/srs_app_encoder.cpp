@@ -93,6 +93,22 @@ void SrsEncoder::hold_on_unpublish()
     srs_trace("Encoder: publisher left, hold %d engines of %s for %dms", (int)ffmpegs.size(), input_stream_name.c_str(), srsu2msi(hold_));
 }
 
+void SrsEncoder::dispose()
+{
+    if (hold_deadline_ <= 0) {
+        return;
+    }
+
+    // Kill before stopping the loop, whose exit would otherwise stop each engine politely.
+    std::vector<SrsFFMPEG*>::iterator it;
+    for (it = ffmpegs.begin(); it != ffmpegs.end(); ++it) {
+        SrsFFMPEG* ffmpeg = *it;
+        ffmpeg->fast_kill();
+    }
+
+    on_unpublish();
+}
+
 // when error, encoder sleep for a while and retry.
 #define SRS_RTMP_ENCODER_CIMS (3 * SRS_UTIME_SECONDS)
 

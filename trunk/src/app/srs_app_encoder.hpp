@@ -44,6 +44,8 @@ public:
     // Keep the engines running for the hold after the publisher leaves, so a publisher that
     // returns within it gets the same engines. The encoder loop stops them when it runs out.
     virtual void hold_on_unpublish();
+    // Kill held engines at once when the server quits. Engines with a publisher are left as they are.
+    virtual void dispose();
 // Interface ISrsReusableThreadHandler.
 public:
     virtual srs_error_t cycle();

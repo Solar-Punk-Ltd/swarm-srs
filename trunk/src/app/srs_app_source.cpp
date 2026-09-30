@@ -886,6 +886,7 @@ srs_error_t SrsOriginHub::initialize(SrsSharedPtr<SrsLiveSource> s, SrsRequest* 
 
 void SrsOriginHub::dispose()
 {
+    encoder->dispose();
     hls->dispose();
     dash->dispose();
 }

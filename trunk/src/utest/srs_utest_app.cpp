@@ -1173,3 +1173,34 @@ VOID TEST(AppEncoderTest, HoldExpiryKillsEnginesAtOnce)
     EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
+
+// Shutting down during the hold kills the held engines at once, and leaves engines with a publisher as they are.
+VOID TEST(AppEncoderTest, DisposeDuringHoldKillsEngines)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e.dispose();
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[1]));
+
+    e.hold_on_unpublish();
+    srs_utime_t starttime = srs_update_system_time();
+    e.dispose();
+    srs_utime_t elapsed = srs_update_system_time() - starttime;
+
+    EXPECT_LT(elapsed, 500 * SRS_UTIME_MILLISECONDS);
+    EXPECT_EQ(0, e.hold_deadline_);
+    EXPECT_TRUE(e.ffmpegs.empty());
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
+}
