@@ -857,6 +857,47 @@ VOID TEST(AppSecurity, CheckSecurity)
 // SIGTERM, so only SIGKILL stops it.
 #define MOCK_ENCODER_FFMPEG "/tmp/srs-utest-encoder-ffmpeg.sh"
 
+static std::string mock_encoder_config(std::string hold)
+{
+    return std::string(_MIN_OK_CONF) + "ff_log_dir /dev/null; vhost test.hold { transcode { enabled on; "
+        "ffmpeg " MOCK_ENCODER_FFMPEG "; " + hold +
+        " engine a { enabled on; vcodec copy; acodec copy; output rtmp://127.0.0.1:[port]/[app]/[stream]_[engine]?vhost=abr.test; }"
+        " engine b { enabled on; vcodec copy; acodec copy; output rtmp://127.0.0.1:[port]/[app]/[stream]_[engine]?vhost=abr.test; }"
+        " } }";
+}
+
+VOID TEST(AppEncoderTest, UnpublishHoldConfig)
+{
+    srs_error_t err;
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("")));
+        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
+        ASSERT_TRUE(transcode != NULL);
+        EXPECT_EQ(60 * SRS_UTIME_SECONDS, conf.get_transcode_unpublish_hold(transcode));
+    }
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("unpublish_hold 7;")));
+        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
+        ASSERT_TRUE(transcode != NULL);
+        EXPECT_EQ(7 * SRS_UTIME_SECONDS, conf.get_transcode_unpublish_hold(transcode));
+    }
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("unpublish_hold 0;")));
+        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
+        ASSERT_TRUE(transcode != NULL);
+        EXPECT_EQ(0, conf.get_transcode_unpublish_hold(transcode));
+    }
+}
+
+// The tests below fork a process from a coroutine, which Cygwin's fork cannot do.
+#ifndef SRS_CYGWIN64
+
 static void mock_encoder_write_ffmpeg()
 {
     FILE* f = fopen(MOCK_ENCODER_FFMPEG, "w");
@@ -865,15 +906,6 @@ static void mock_encoder_write_ffmpeg()
         fclose(f);
     }
     chmod(MOCK_ENCODER_FFMPEG, 0755);
-}
-
-static std::string mock_encoder_config(std::string hold)
-{
-    return std::string(_MIN_OK_CONF) + "ff_log_dir /dev/null; vhost test.hold { transcode { enabled on; "
-        "ffmpeg " MOCK_ENCODER_FFMPEG "; " + hold +
-        " engine a { enabled on; vcodec copy; acodec copy; output rtmp://127.0.0.1:[port]/[app]/[stream]_[engine]?vhost=abr.test; }"
-        " engine b { enabled on; vcodec copy; acodec copy; output rtmp://127.0.0.1:[port]/[app]/[stream]_[engine]?vhost=abr.test; }"
-        " } }";
 }
 
 // Points _srs_config at a test config for the life of this object.
@@ -922,44 +954,15 @@ static bool mock_encoder_pid_alive(int pid)
 static void mock_encoder_wait_started(SrsEncoder* e)
 {
     for (int i = 0; i < 100; i++) {
-        std::vector<int> pids = mock_encoder_pids(e);
-        bool started = !pids.empty();
-        for (int j = 0; j < (int)pids.size(); j++) {
-            started = started && pids[j] > 0;
+        // The pid is set at fork, but the process counts as started only when start() returns.
+        bool started = !e->ffmpegs.empty();
+        for (int j = 0; j < (int)e->ffmpegs.size(); j++) {
+            started = started && e->ffmpegs[j]->process->started();
         }
         if (started) {
             return;
         }
         srs_usleep(10 * SRS_UTIME_MILLISECONDS);
-    }
-}
-
-VOID TEST(AppEncoderTest, UnpublishHoldConfig)
-{
-    srs_error_t err;
-
-    if (true) {
-        MockSrsConfig conf;
-        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("")));
-        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
-        ASSERT_TRUE(transcode != NULL);
-        EXPECT_EQ(60 * SRS_UTIME_SECONDS, conf.get_transcode_unpublish_hold(transcode));
-    }
-
-    if (true) {
-        MockSrsConfig conf;
-        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("unpublish_hold 7;")));
-        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
-        ASSERT_TRUE(transcode != NULL);
-        EXPECT_EQ(7 * SRS_UTIME_SECONDS, conf.get_transcode_unpublish_hold(transcode));
-    }
-
-    if (true) {
-        MockSrsConfig conf;
-        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("unpublish_hold 0;")));
-        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
-        ASSERT_TRUE(transcode != NULL);
-        EXPECT_EQ(0, conf.get_transcode_unpublish_hold(transcode));
     }
 }
 
@@ -1204,3 +1207,5 @@ VOID TEST(AppEncoderTest, DisposeDuringHoldKillsEngines)
     EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
+
+#endif
