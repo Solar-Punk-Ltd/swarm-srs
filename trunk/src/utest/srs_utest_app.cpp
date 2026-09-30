@@ -1208,4 +1208,99 @@ VOID TEST(AppEncoderTest, DisposeDuringHoldKillsEngines)
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
 
+
+// Runs on_unpublish on its own coroutine, as a transcode reload does while a publisher comes and goes.
+class MockEncoderStopper : public ISrsCoroutineHandler
+{
+public:
+    SrsEncoder* e;
+    bool done;
+public:
+    MockEncoderStopper(SrsEncoder* v) {
+        e = v;
+        done = false;
+    }
+    virtual srs_error_t cycle() {
+        e->on_unpublish();
+        done = true;
+        return srs_success;
+    }
+};
+
+static void mock_encoder_wait_stopper(MockEncoderStopper* s)
+{
+    for (int i = 0; i < 500 && !s->done; i++) {
+        srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+    }
+}
+
+// A publisher returning while a reload stops the held engines waits for that stop, instead of stopping the loop a
+// second time, which aborts SRS, and then gets a fresh set.
+VOID TEST(AppEncoderTest, PublishDuringReloadStopGetsFreshEngines)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+    e.hold_on_unpublish();
+
+    MockEncoderStopper reload(&e);
+    SrsSTCoroutine trd("reload", &reload, _srs_context->get_id());
+    HELPER_ASSERT_SUCCESS(trd.start());
+    srs_usleep(1 * SRS_UTIME_MILLISECONDS);
+
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_stopper(&reload);
+    EXPECT_TRUE(reload.done);
+    mock_encoder_wait_started(&e);
+
+    std::vector<int> fresh = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)fresh.size());
+    EXPECT_TRUE(mock_encoder_pid_alive(fresh[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(fresh[1]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
+    e.on_unpublish();
+}
+
+// A publisher leaving while a reload stops the engines does not start a hold over engines that are going away, so
+// the next publisher gets a fresh set instead of keeping nothing.
+VOID TEST(AppEncoderTest, UnpublishDuringReloadStopDoesNotHold)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+
+    MockEncoderStopper reload(&e);
+    SrsSTCoroutine trd("reload", &reload, _srs_context->get_id());
+    HELPER_ASSERT_SUCCESS(trd.start());
+    srs_usleep(1 * SRS_UTIME_MILLISECONDS);
+
+    e.hold_on_unpublish();
+    mock_encoder_wait_stopper(&reload);
+    EXPECT_TRUE(reload.done);
+    EXPECT_EQ(0, e.hold_deadline_);
+
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> fresh = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)fresh.size());
+    EXPECT_TRUE(mock_encoder_pid_alive(fresh[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(fresh[1]));
+    e.on_unpublish();
+}
+
 #endif

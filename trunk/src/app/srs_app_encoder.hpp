@@ -34,6 +34,8 @@ private:
     srs_utime_t hold_;
     // When the held engines stop, or 0 when not holding.
     srs_utime_t hold_deadline_;
+    // Whether on_unpublish is stopping the loop, which must not be stopped twice at once.
+    bool stopping_;
 public:
     SrsEncoder();
     virtual ~SrsEncoder();
@@ -54,6 +56,7 @@ private:
 private:
     virtual void clear_engines();
     virtual void kill_engines();
+    virtual void fast_kill_engines();
     virtual SrsFFMPEG* at(int index);
     virtual srs_error_t parse_scope_engines(SrsRequest* req);
     virtual srs_error_t parse_ffmpeg(SrsRequest* req, SrsConfDirective* conf);

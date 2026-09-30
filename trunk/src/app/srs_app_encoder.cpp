@@ -27,6 +27,7 @@ SrsEncoder::SrsEncoder()
     pprint = SrsPithyPrint::create_encoder();
     hold_ = 0;
     hold_deadline_ = 0;
+    stopping_ = false;
 }
 
 SrsEncoder::~SrsEncoder()
@@ -41,7 +42,7 @@ srs_error_t SrsEncoder::on_publish(SrsRequest* req)
 {
     srs_error_t err = srs_success;
 
-    if (hold_deadline_ > 0) {
+    if (hold_deadline_ > 0 && !ffmpegs.empty() && !stopping_) {
         hold_deadline_ = 0;
         srs_trace("Encoder: publisher returned within the hold, keep %d engines of %s", (int)ffmpegs.size(), input_stream_name.c_str());
         return err;
@@ -77,14 +78,27 @@ srs_error_t SrsEncoder::on_publish(SrsRequest* req)
 
 void SrsEncoder::on_unpublish()
 {
+    if (stopping_) {
+        while (stopping_) {
+            srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+        }
+        return;
+    }
+    stopping_ = true;
+
+    if (hold_deadline_ > 0) {
+        fast_kill_engines();
+    }
     hold_deadline_ = 0;
+
     trd->stop();
     clear_engines();
+    stopping_ = false;
 }
 
 void SrsEncoder::hold_on_unpublish()
 {
-    if (hold_ <= 0 || ffmpegs.empty()) {
+    if (hold_ <= 0 || ffmpegs.empty() || stopping_) {
         on_unpublish();
         return;
     }
@@ -97,13 +111,6 @@ void SrsEncoder::dispose()
 {
     if (hold_deadline_ <= 0) {
         return;
-    }
-
-    // Kill before stopping the loop, whose exit would otherwise stop each engine politely.
-    std::vector<SrsFFMPEG*>::iterator it;
-    for (it = ffmpegs.begin(); it != ffmpegs.end(); ++it) {
-        SrsFFMPEG* ffmpeg = *it;
-        ffmpeg->fast_kill();
     }
 
     on_unpublish();
@@ -200,13 +207,18 @@ void SrsEncoder::clear_engines()
 // ignores SIGTERM, so a polite stop would cost a second per engine for nothing.
 void SrsEncoder::kill_engines()
 {
+    fast_kill_engines();
+    clear_engines();
+}
+
+// Kill before stopping the loop, whose exit would otherwise stop each engine politely.
+void SrsEncoder::fast_kill_engines()
+{
     std::vector<SrsFFMPEG*>::iterator it;
     for (it = ffmpegs.begin(); it != ffmpegs.end(); ++it) {
         SrsFFMPEG* ffmpeg = *it;
         ffmpeg->fast_kill();
     }
-
-    clear_engines();
 }
 
 SrsFFMPEG* SrsEncoder::at(int index)
