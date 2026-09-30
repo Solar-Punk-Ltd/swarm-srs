@@ -1169,7 +1169,7 @@ void SrsOriginHub::on_unpublish()
     // destroy all forwarders
     destroy_forwarders();
     
-    encoder->on_unpublish();
+    encoder->hold_on_unpublish();
     hls->on_unpublish();
     dash->on_unpublish();
     dvr->on_unpublish();

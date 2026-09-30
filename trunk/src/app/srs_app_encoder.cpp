@@ -25,6 +25,8 @@ SrsEncoder::SrsEncoder()
 {
     trd = new SrsDummyCoroutine();
     pprint = SrsPithyPrint::create_encoder();
+    hold_ = 0;
+    hold_deadline_ = 0;
 }
 
 SrsEncoder::~SrsEncoder()
@@ -38,6 +40,15 @@ SrsEncoder::~SrsEncoder()
 srs_error_t SrsEncoder::on_publish(SrsRequest* req)
 {
     srs_error_t err = srs_success;
+
+    if (hold_deadline_ > 0) {
+        hold_deadline_ = 0;
+        srs_trace("Encoder: publisher returned within the hold, keep %d engines of %s", (int)ffmpegs.size(), input_stream_name.c_str());
+        return err;
+    }
+
+    // Reap what an expired hold left, the finished loop and any engine it did not get to.
+    on_unpublish();
     
     // parse the transcode engines for vhost and app and stream.
     err = parse_scope_engines(req);
@@ -66,8 +77,20 @@ srs_error_t SrsEncoder::on_publish(SrsRequest* req)
 
 void SrsEncoder::on_unpublish()
 {
+    hold_deadline_ = 0;
     trd->stop();
     clear_engines();
+}
+
+void SrsEncoder::hold_on_unpublish()
+{
+    if (hold_ <= 0 || ffmpegs.empty()) {
+        on_unpublish();
+        return;
+    }
+
+    hold_deadline_ = srs_update_system_time() + hold_;
+    srs_trace("Encoder: publisher left, hold %d engines of %s for %dms", (int)ffmpegs.size(), input_stream_name.c_str(), srsu2msi(hold_));
 }
 
 // when error, encoder sleep for a while and retry.
@@ -82,6 +105,13 @@ srs_error_t SrsEncoder::cycle()
         // @see https://github.com/ossrs/srs/issues/1634#issuecomment-597571561
         if ((err = trd->pull()) != srs_success) {
             err = srs_error_wrap(err, "encoder");
+            break;
+        }
+
+        if (hold_deadline_ > 0 && srs_update_system_time() >= hold_deadline_) {
+            srs_trace("Encoder: hold of %s expired, stop %d engines", input_stream_name.c_str(), (int)ffmpegs.size());
+            hold_deadline_ = 0;
+            kill_engines();
             break;
         }
 
@@ -150,6 +180,19 @@ void SrsEncoder::clear_engines()
     ffmpegs.clear();
 }
 
+// Held engines wait on a stalled input with nothing to flush, and an ffmpeg in that state
+// ignores SIGTERM, so a polite stop would cost a second per engine for nothing.
+void SrsEncoder::kill_engines()
+{
+    std::vector<SrsFFMPEG*>::iterator it;
+    for (it = ffmpegs.begin(); it != ffmpegs.end(); ++it) {
+        SrsFFMPEG* ffmpeg = *it;
+        ffmpeg->fast_kill();
+    }
+
+    clear_engines();
+}
+
 SrsFFMPEG* SrsEncoder::at(int index)
 {
     return ffmpegs[index];
@@ -214,6 +257,8 @@ srs_error_t SrsEncoder::parse_ffmpeg(SrsRequest* req, SrsConfDirective* conf)
         return err;
     }
     
+    hold_ = _srs_config->get_transcode_unpublish_hold(conf);
+
     // create engine
     for (int i = 0; i < (int)engines.size(); i++) {
         SrsConfDirective* engine = engines[i];

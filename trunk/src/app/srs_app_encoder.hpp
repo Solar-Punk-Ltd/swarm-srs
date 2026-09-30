@@ -29,12 +29,21 @@ private:
 private:
     SrsCoroutine* trd;
     SrsPithyPrint* pprint;
+private:
+    // How long the engines outlive their publisher, from the transcode config.
+    srs_utime_t hold_;
+    // When the held engines stop, or 0 when not holding.
+    srs_utime_t hold_deadline_;
 public:
     SrsEncoder();
     virtual ~SrsEncoder();
 public:
     virtual srs_error_t on_publish(SrsRequest* req);
+    // Stop the engines at once.
     virtual void on_unpublish();
+    // Keep the engines running for the hold after the publisher leaves, so a publisher that
+    // returns within it gets the same engines. The encoder loop stops them when it runs out.
+    virtual void hold_on_unpublish();
 // Interface ISrsReusableThreadHandler.
 public:
     virtual srs_error_t cycle();
@@ -42,6 +51,7 @@ private:
     virtual srs_error_t do_cycle();
 private:
     virtual void clear_engines();
+    virtual void kill_engines();
     virtual SrsFFMPEG* at(int index);
     virtual srs_error_t parse_scope_engines(SrsRequest* req);
     virtual srs_error_t parse_ffmpeg(SrsRequest* req, SrsConfDirective* conf);

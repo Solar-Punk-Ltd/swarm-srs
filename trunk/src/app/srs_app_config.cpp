@@ -2721,7 +2721,7 @@ srs_error_t SrsConfig::check_normal_config()
                 for (int j = 0; j < (int)conf->directives.size(); j++) {
                     SrsConfDirective* trans = conf->at(j);
                     string m = trans->name.c_str();
-                    if (m != "enabled" && m != "ffmpeg" && m != "engine") {
+                    if (m != "enabled" && m != "ffmpeg" && m != "unpublish_hold" && m != "engine") {
                         return srs_error_new(ERROR_SYSTEM_CONFIG_INVALID, "illegal vhost.transcode.%s of %s", m.c_str(), vhost->arg0().c_str());
                     }
                     if (m == "engine") {
@@ -6057,6 +6057,22 @@ string SrsConfig::get_transcode_ffmpeg(SrsConfDirective* conf)
     }
     
     return conf->arg0();
+}
+
+srs_utime_t SrsConfig::get_transcode_unpublish_hold(SrsConfDirective* conf)
+{
+    static srs_utime_t DEFAULT = 60 * SRS_UTIME_SECONDS;
+    
+    if (!conf) {
+        return DEFAULT;
+    }
+    
+    conf = conf->get("unpublish_hold");
+    if (!conf || conf->arg0().empty()) {
+        return DEFAULT;
+    }
+    
+    return (srs_utime_t)(::atoi(conf->arg0().c_str()) * SRS_UTIME_SECONDS);
 }
 
 vector<SrsConfDirective*> SrsConfig::get_transcode_engines(SrsConfDirective* conf)

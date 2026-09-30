@@ -16,6 +16,17 @@ using namespace std;
 #include <srs_app_st.hpp>
 #include <srs_protocol_conn.hpp>
 #include <srs_app_conn.hpp>
+#include <srs_app_encoder.hpp>
+#include <srs_app_ffmpeg.hpp>
+#include <srs_app_process.hpp>
+#include <srs_protocol_rtmp_stack.hpp>
+#include <srs_core_autofree.hpp>
+#include <srs_kernel_utility.hpp>
+#include <srs_utest_config.hpp>
+
+#include <signal.h>
+#include <stdio.h>
+#include <sys/stat.h>
 
 class MockIDResource : public ISrsResource
 {
@@ -841,3 +852,324 @@ VOID TEST(AppSecurity, CheckSecurity)
     //       4. deny if matches deny strategy.
 }
 
+
+// Stands in for ffmpeg in the encoder tests. Like an ffmpeg whose input has stalled, it ignores SIGINT and
+// SIGTERM, so only SIGKILL stops it.
+#define MOCK_ENCODER_FFMPEG "/tmp/srs-utest-encoder-ffmpeg.sh"
+
+static void mock_encoder_write_ffmpeg()
+{
+    FILE* f = fopen(MOCK_ENCODER_FFMPEG, "w");
+    if (f) {
+        fprintf(f, "#!/bin/sh\ntrap '' INT TERM\nwhile true; do sleep 1; done\n");
+        fclose(f);
+    }
+    chmod(MOCK_ENCODER_FFMPEG, 0755);
+}
+
+static std::string mock_encoder_config(std::string hold)
+{
+    return std::string(_MIN_OK_CONF) + "ff_log_dir /dev/null; vhost test.hold { transcode { enabled on; "
+        "ffmpeg " MOCK_ENCODER_FFMPEG "; " + hold +
+        " engine a { enabled on; vcodec copy; acodec copy; output rtmp://127.0.0.1:[port]/[app]/[stream]_[engine]?vhost=abr.test; }"
+        " engine b { enabled on; vcodec copy; acodec copy; output rtmp://127.0.0.1:[port]/[app]/[stream]_[engine]?vhost=abr.test; }"
+        " } }";
+}
+
+// Points _srs_config at a test config for the life of this object.
+class MockEncoderConfig
+{
+public:
+    MockSrsConfig conf;
+private:
+    SrsConfig* saved_;
+public:
+    MockEncoderConfig() {
+        saved_ = _srs_config;
+        _srs_config = &conf;
+        mock_encoder_write_ffmpeg();
+    }
+    virtual ~MockEncoderConfig() {
+        _srs_config = saved_;
+    }
+};
+
+static SrsRequest* mock_encoder_request()
+{
+    SrsRequest* req = new SrsRequest();
+    req->vhost = "test.hold";
+    req->app = "live";
+    req->stream = "livestream";
+    req->port = 1935;
+    return req;
+}
+
+static std::vector<int> mock_encoder_pids(SrsEncoder* e)
+{
+    std::vector<int> pids;
+    for (int i = 0; i < (int)e->ffmpegs.size(); i++) {
+        pids.push_back(e->ffmpegs[i]->process->get_pid());
+    }
+    return pids;
+}
+
+static bool mock_encoder_pid_alive(int pid)
+{
+    return pid > 0 && kill(pid, 0) == 0;
+}
+
+// Waits for the encoder coroutine to start every engine.
+static void mock_encoder_wait_started(SrsEncoder* e)
+{
+    for (int i = 0; i < 100; i++) {
+        std::vector<int> pids = mock_encoder_pids(e);
+        bool started = !pids.empty();
+        for (int j = 0; j < (int)pids.size(); j++) {
+            started = started && pids[j] > 0;
+        }
+        if (started) {
+            return;
+        }
+        srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+    }
+}
+
+VOID TEST(AppEncoderTest, UnpublishHoldConfig)
+{
+    srs_error_t err;
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("")));
+        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
+        ASSERT_TRUE(transcode != NULL);
+        EXPECT_EQ(60 * SRS_UTIME_SECONDS, conf.get_transcode_unpublish_hold(transcode));
+    }
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("unpublish_hold 7;")));
+        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
+        ASSERT_TRUE(transcode != NULL);
+        EXPECT_EQ(7 * SRS_UTIME_SECONDS, conf.get_transcode_unpublish_hold(transcode));
+    }
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("unpublish_hold 0;")));
+        SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
+        ASSERT_TRUE(transcode != NULL);
+        EXPECT_EQ(0, conf.get_transcode_unpublish_hold(transcode));
+    }
+}
+
+// A publisher that returns within the hold gets the same engines, still running, and no second set.
+VOID TEST(AppEncoderTest, HoldThenReturnKeepsEngines)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<SrsFFMPEG*> engines = e.ffmpegs;
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e.hold_on_unpublish();
+    EXPECT_TRUE(e.hold_deadline_ > 0);
+    ASSERT_EQ(2, (int)e.ffmpegs.size());
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[1]));
+
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    EXPECT_EQ(0, e.hold_deadline_);
+    EXPECT_TRUE(engines == e.ffmpegs);
+    EXPECT_TRUE(pids == mock_encoder_pids(&e));
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[1]));
+
+    e.on_unpublish();
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
+}
+
+// Nobody returns, so the encoder loop stops the engines once the hold runs out.
+VOID TEST(AppEncoderTest, HoldThenExpiryStopsEngines)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 1;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e.hold_on_unpublish();
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
+
+    // The loop looks every 3s, so the engines go between 1s and about 4s from now.
+    for (int i = 0; i < 80 && !e.ffmpegs.empty(); i++) {
+        srs_usleep(100 * SRS_UTIME_MILLISECONDS);
+    }
+    EXPECT_TRUE(e.ffmpegs.empty());
+    EXPECT_EQ(0, e.hold_deadline_);
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
+
+    // A publisher after the expiry gets a fresh set.
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> fresh = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)fresh.size());
+    EXPECT_TRUE(mock_encoder_pid_alive(fresh[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(fresh[1]));
+    e.on_unpublish();
+}
+
+// A hold of 0 is the behaviour without the hold: the engines stop when the publisher leaves.
+VOID TEST(AppEncoderTest, HoldZeroStopsAtOnce)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 0;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e.hold_on_unpublish();
+    EXPECT_EQ(0, e.hold_deadline_);
+    EXPECT_TRUE(e.ffmpegs.empty());
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
+}
+
+// A source destroyed during the hold stops its engines at once.
+VOID TEST(AppEncoderTest, DestroyDuringHoldStopsEngines)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder* e = new SrsEncoder();
+    HELPER_ASSERT_SUCCESS(e->on_publish(req.get()));
+    mock_encoder_wait_started(e);
+    std::vector<int> pids = mock_encoder_pids(e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e->hold_on_unpublish();
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
+
+    srs_freep(e);
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
+}
+
+// A transcode reload during the hold, which calls on_unpublish, stops the held engines at once, and the next
+// publish starts a fresh set rather than resuming the hold.
+VOID TEST(AppEncoderTest, ReloadDuringHoldRestartsEngines)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e.hold_on_unpublish();
+    e.on_unpublish();
+    EXPECT_EQ(0, e.hold_deadline_);
+    EXPECT_TRUE(e.ffmpegs.empty());
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
+
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> fresh = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)fresh.size());
+    EXPECT_TRUE(mock_encoder_pid_alive(fresh[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(fresh[1]));
+    EXPECT_TRUE(fresh[0] != pids[0]);
+    e.on_unpublish();
+}
+
+// An engine that dies during the hold, as a rung ffmpeg does when its idle output is cut, is restarted by the
+// encoder loop after the publisher returns.
+VOID TEST(AppEncoderTest, HoldKeepsRestartingDeadEngines)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e.hold_on_unpublish();
+    kill(pids[0], SIGKILL);
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+
+    // The loop reaps the dead engine on one pass and starts it on the next, 3s apart.
+    int restarted = -1;
+    for (int i = 0; i < 80; i++) {
+        restarted = e.ffmpegs[0]->process->get_pid();
+        if (restarted != pids[0] && mock_encoder_pid_alive(restarted)) {
+            break;
+        }
+        srs_usleep(100 * SRS_UTIME_MILLISECONDS);
+    }
+    EXPECT_TRUE(restarted != pids[0]);
+    EXPECT_TRUE(mock_encoder_pid_alive(restarted));
+    EXPECT_EQ(pids[1], e.ffmpegs[1]->process->get_pid());
+    e.on_unpublish();
+}
+
+// Held engines have nothing to flush, so the expiry kills them all at once instead of giving each one the
+// polite SIGTERM wait, which an ffmpeg with a stalled input ignores.
+VOID TEST(AppEncoderTest, HoldExpiryKillsEnginesAtOnce)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    srs_utime_t starttime = srs_update_system_time();
+    e.kill_engines();
+    srs_utime_t elapsed = srs_update_system_time() - starttime;
+
+    // The polite stop waits a whole second per engine that ignores SIGTERM.
+    EXPECT_LT(elapsed, 500 * SRS_UTIME_MILLISECONDS);
+    EXPECT_TRUE(e.ffmpegs.empty());
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
+}
