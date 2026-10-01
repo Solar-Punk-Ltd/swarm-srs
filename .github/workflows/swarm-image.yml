@@ -14,6 +14,7 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: read
 
 jobs:
   image:
@@ -24,6 +25,16 @@ jobs:
       SOURCE_URL: https://github.com/${{ github.repository }}
       INPUT_TAG: ${{ inputs.tag }}
     steps:
+      # The Dockerfile runs no tests, so an image is built only from a commit whose Test run has passed.
+      - name: Require a passing Test run for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow Test --commit "$GITHUB_SHA" \
+            --status completed --limit 1 --json conclusion --jq '.[0].conclusion')
+          if [ "$conclusion" != "success" ]; then
+            echo "Test has not passed for $GITHUB_SHA (latest completed run: ${conclusion:-none})" && exit 1
+          fi
       - name: Check the tag
         run: |
           if [[ ! $INPUT_TAG =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
