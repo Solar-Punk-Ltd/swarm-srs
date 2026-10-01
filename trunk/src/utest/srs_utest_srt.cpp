@@ -630,21 +630,21 @@ static void mock_takeover_publish(MockTakeoverPublisher* old, SrsRequest* req)
     stat->on_stream_publish(req, old->id);
 }
 
-VOID TEST(SrtTakeoverTest, ConfigDefaultOn)
+VOID TEST(SrtTakeoverTest, ConfigDefaultOffAndOn)
 {
     srs_error_t err;
 
     if (true) {
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { srt { enabled on; } }"));
-        EXPECT_TRUE(conf.get_srt_takeover("v"));
-        EXPECT_TRUE(conf.get_srt_takeover("absent"));
+        EXPECT_FALSE(conf.get_srt_takeover("v"));
+        EXPECT_FALSE(conf.get_srt_takeover("absent"));
     }
 
     if (true) {
         MockSrsConfig conf;
-        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { srt { enabled on; takeover off; } }"));
-        EXPECT_FALSE(conf.get_srt_takeover("v"));
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { srt { enabled on; takeover on; } }"));
+        EXPECT_TRUE(conf.get_srt_takeover("v"));
     }
 }
 
@@ -700,7 +700,7 @@ VOID TEST(SrtTakeoverTest, RefusedPublisherNeverTakesOver)
 
     MockTakeoverConfig mc;
     // Nothing listens on port 1, so the hook fails, which SRS treats as a refusal.
-    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { srt { enabled on; } "
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { srt { enabled on; takeover on; } "
         "http_hooks { enabled on; on_publish http://127.0.0.1:1/refuse; } }"));
 
     SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-refused"));

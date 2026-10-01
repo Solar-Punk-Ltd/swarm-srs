@@ -8341,9 +8341,9 @@ bool SrsConfig::get_srt_to_rtmp(std::string vhost)
 
 bool SrsConfig::get_srt_takeover(std::string vhost)
 {
-    SRS_OVERWRITE_BY_ENV_BOOL2("srs.vhost.srt.takeover"); // SRS_VHOST_SRT_TAKEOVER
+    SRS_OVERWRITE_BY_ENV_BOOL("srs.vhost.srt.takeover"); // SRS_VHOST_SRT_TAKEOVER
 
-    static bool DEFAULT = true;
+    static bool DEFAULT = false;
 
     SrsConfDirective* conf = get_srt(vhost);
     if (!conf) {
@@ -8355,7 +8355,7 @@ bool SrsConfig::get_srt_takeover(std::string vhost)
         return DEFAULT;
     }
 
-    return SRS_CONF_PREFER_TRUE(conf->arg0());
+    return SRS_CONF_PREFER_FALSE(conf->arg0());
 }
 
 bool SrsConfig::get_http_stream_enabled()
