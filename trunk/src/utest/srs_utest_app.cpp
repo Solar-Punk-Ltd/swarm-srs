@@ -1041,6 +1041,14 @@ static void mock_encoder_wait_started(SrsEncoder* e)
     }
 }
 
+// Ends a test with the hold's kill instead of the polite stop, which costs a second per engine because the mock
+// ignores SIGTERM. Tests keep the polite stop only where it is the behaviour under test.
+static void mock_encoder_kill_all(SrsEncoder* e)
+{
+    e->hold_on_unpublish();
+    e->on_unpublish();
+}
+
 // A publisher returning after the hold has run out, but before the encoder loop's next check has killed the engines,
 // still gets the same engines. That is the "up to 3 seconds later" full.conf documents.
 VOID TEST(AppEncoderTest, ReturnAfterDeadlineBeforeTheLoopKeepsEngines)
@@ -1101,7 +1109,7 @@ VOID TEST(AppEncoderTest, HoldThenReturnKeepsEngines)
     EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
     EXPECT_TRUE(mock_encoder_pid_alive(pids[1]));
 
-    e.on_unpublish();
+    mock_encoder_kill_all(&e);
     EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
@@ -1141,7 +1149,7 @@ VOID TEST(AppEncoderTest, HoldThenExpiryStopsEngines)
     ASSERT_EQ(2, (int)fresh.size());
     EXPECT_TRUE(mock_encoder_pid_alive(fresh[0]));
     EXPECT_TRUE(mock_encoder_pid_alive(fresh[1]));
-    e.on_unpublish();
+    mock_encoder_kill_all(&e);
 }
 
 // A hold of 0 is the behaviour without the hold: the engines stop when the publisher leaves.
@@ -1224,7 +1232,7 @@ VOID TEST(AppEncoderTest, ReloadDuringHoldRestartsEngines)
     EXPECT_TRUE(mock_encoder_pid_alive(fresh[0]));
     EXPECT_TRUE(mock_encoder_pid_alive(fresh[1]));
     EXPECT_TRUE(fresh[0] != pids[0]);
-    e.on_unpublish();
+    mock_encoder_kill_all(&e);
 }
 
 // An engine that dies while held is restarted by the encoder loop, which keeps running through the hold. An
@@ -1261,7 +1269,7 @@ VOID TEST(AppEncoderTest, HoldKeepsRestartingDeadEngines)
     EXPECT_TRUE(restarted != pids[0]);
     EXPECT_TRUE(mock_encoder_pid_alive(restarted));
     EXPECT_EQ(pids[1], e.ffmpegs[1]->process->get_pid());
-    e.on_unpublish();
+    mock_encoder_kill_all(&e);
 }
 
 // kill_engines, which the hold expiry calls, kills every engine at once instead of giving each one the polite
@@ -1441,7 +1449,7 @@ VOID TEST(AppEncoderTest, PublishDuringReloadStopGetsFreshEngines)
     EXPECT_TRUE(mock_encoder_pid_alive(fresh[1]));
     EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
-    e.on_unpublish();
+    mock_encoder_kill_all(&e);
 }
 
 // A publisher expired while its unpublish stops the engines, as a takeover does to a publisher that is already
@@ -1507,7 +1515,7 @@ VOID TEST(AppEncoderTest, UnpublishDuringReloadStopDoesNotHold)
     ASSERT_EQ(2, (int)fresh.size());
     EXPECT_TRUE(mock_encoder_pid_alive(fresh[0]));
     EXPECT_TRUE(mock_encoder_pid_alive(fresh[1]));
-    e.on_unpublish();
+    mock_encoder_kill_all(&e);
 }
 
 #endif
