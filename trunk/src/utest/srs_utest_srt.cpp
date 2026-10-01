@@ -879,6 +879,39 @@ VOID TEST(SrtTakeoverTest, RefusesWithoutAPublisher)
     HELPER_EXPECT_FAILED(srs_srt_takeover_publisher(req.get(), 100 * SRS_UTIME_MILLISECONDS));
 }
 
+// acquire_publish takes a busy stream over only when the takeover is on, and still refuses with the old code while
+// the old publisher's source stays busy.
+VOID TEST(SrtTakeoverTest, AcquirePublishTakesOverOnlyWhenOn)
+{
+    srs_error_t err;
+
+    for (int on = 0; on <= 1; on++) {
+        MockTakeoverConfig mc;
+        HELPER_ASSERT_SUCCESS(mc.conf.parse(std::string(_MIN_OK_CONF) +
+            "vhost __defaultVhost__ { srt { enabled on; takeover " + (on ? "on" : "off") + "; } }"));
+
+        std::string name = on ? "acquire-on" : "acquire-off";
+        SrsUniquePtr<SrsRequest> req(mock_takeover_request(name));
+        MockTakeoverPublisher old(name + "-old", false);
+        mock_takeover_publish(&old, req.get());
+
+        SrsContextId cid = _srs_context->get_id();
+        SrsMpegtsSrtConn* conn = new SrsMpegtsSrtConn(NULL, -1, "127.0.0.1", 9000);
+        conn->req_->vhost = req->vhost;
+        conn->req_->app = req->app;
+        conn->req_->stream = req->stream;
+        conn->srt_source_->can_publish_ = false;
+
+        err = conn->acquire_publish();
+        EXPECT_EQ(ERROR_SRT_SOURCE_BUSY, srs_error_code(err));
+        srs_freep(err);
+        EXPECT_EQ(on == 1, old.expired);
+
+        srs_freep(conn);
+        _srs_context->set_id(cid);
+    }
+}
+
 // A publisher the on_publish hook refuses is turned away before the busy check, so it never expires the publisher
 // it would have replaced.
 VOID TEST(SrtTakeoverTest, RefusedPublisherNeverTakesOver)
