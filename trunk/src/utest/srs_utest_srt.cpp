@@ -679,7 +679,8 @@ VOID TEST(SrtTakeoverTest, RefusesWhenThePublisherDoesNotGo)
 
     EXPECT_TRUE(old.expired);
     EXPECT_TRUE(SrsStatistic::instance()->find_client(old.id) != NULL);
-    EXPECT_GE(elapsed, 100 * SRS_UTIME_MILLISECONDS);
+    // Half the bound, because ST may end the first of the waits early.
+    EXPECT_GE(elapsed, 50 * SRS_UTIME_MILLISECONDS);
 }
 
 // With no publisher on record there is nothing to take over.
