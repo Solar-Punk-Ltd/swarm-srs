@@ -412,6 +412,10 @@ srs_error_t SrsMpegtsSrtConn::acquire_publish()
         SrsSharedPtr<SrsLiveSource> live = _srs_sources->fetch(req_);
         if (!srt_source_->can_publish() || (live.get() && !live->can_publish(false))) {
             if ((err = srs_srt_takeover_publisher(req_, SRS_SRT_TAKEOVER_TIMEOUT)) != srs_success) {
+                // This connection was interrupted while it waited, so it is going and must not publish.
+                if (srs_error_code(err) == ERROR_THREAD_INTERRUPED) {
+                    return srs_error_wrap(err, "srt: takeover");
+                }
                 srs_warn("srt: no takeover, %s", srs_error_desc(err).c_str());
                 srs_freep(err);
             }

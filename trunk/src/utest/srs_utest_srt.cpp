@@ -912,6 +912,64 @@ VOID TEST(SrtTakeoverTest, AcquirePublishTakesOverOnlyWhenOn)
     }
 }
 
+// Runs acquire_publish on its own coroutine, as a new connection does.
+class MockTakeoverAcquirer : public ISrsCoroutineHandler
+{
+public:
+    SrsMpegtsSrtConn* conn;
+    bool done;
+    int code;
+public:
+    MockTakeoverAcquirer(SrsMpegtsSrtConn* c) : conn(c), done(false), code(0) {
+    }
+    virtual srs_error_t cycle() {
+        srs_error_t err = conn->acquire_publish();
+        code = srs_error_code(err);
+        srs_freep(err);
+        done = true;
+        return srs_success;
+    }
+};
+
+// A new connection interrupted while it waits for the old publisher is going itself, so acquire_publish refuses it
+// at once instead of running the busy checks, which would let it publish if the old one had just gone.
+VOID TEST(SrtTakeoverTest, AcquirePublishRefusesWhenInterrupted)
+{
+    srs_error_t err;
+
+    MockTakeoverConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { srt { enabled on; takeover on; } }"));
+
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("acquire-interrupted"));
+    MockTakeoverPublisher old("acquire-interrupted-old", true);
+    mock_takeover_publish(&old, req.get());
+
+    SrsContextId cid = _srs_context->get_id();
+    SrsMpegtsSrtConn* conn = new SrsMpegtsSrtConn(NULL, -1, "127.0.0.1", 9000);
+    conn->req_->vhost = req->vhost;
+    conn->req_->app = req->app;
+    conn->req_->stream = req->stream;
+    conn->srt_source_->can_publish_ = false;
+
+    if (true) {
+        MockTakeoverAcquirer acquirer(conn);
+        SrsSTCoroutine trd("acquirer", &acquirer, _srs_context->get_id());
+        HELPER_ASSERT_SUCCESS(trd.start());
+
+        srs_usleep(30 * SRS_UTIME_MILLISECONDS);
+        trd.interrupt();
+        for (int i = 0; i < 50 && !acquirer.done; i++) {
+            srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+        }
+
+        EXPECT_TRUE(acquirer.done);
+        EXPECT_EQ(ERROR_THREAD_INTERRUPED, acquirer.code);
+    }
+
+    srs_freep(conn);
+    _srs_context->set_id(cid);
+}
+
 // A publisher the on_publish hook refuses is turned away before the busy check, so it never expires the publisher
 // it would have replaced.
 VOID TEST(SrtTakeoverTest, RefusedPublisherNeverTakesOver)
