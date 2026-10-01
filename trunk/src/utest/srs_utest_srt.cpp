@@ -14,6 +14,9 @@
 #include <srs_core_autofree.hpp>
 #include <srs_app_srt_conn.hpp>
 #include <srs_app_srt_source.hpp>
+#include <srs_app_source.hpp>
+#include <srs_app_server.hpp>
+#include <srs_app_hybrid.hpp>
 #include <srs_app_statistic.hpp>
 #include <srs_app_st.hpp>
 #include <srs_app_conn.hpp>
@@ -1003,3 +1006,153 @@ VOID TEST(SrtTakeoverTest, RefusedPublisherNeverTakesOver)
     srs_freep(conn);
     _srs_context->set_id(cid);
 }
+
+// A bridge whose publish fails or succeeds on demand, so a publish can fail after the SRT source has marked itself
+// busy. The source owns and frees it.
+class MockSrtReleaseBridge : public ISrsStreamBridge
+{
+public:
+    bool* fail;
+public:
+    MockSrtReleaseBridge(bool* v) : fail(v) {
+    }
+    virtual srs_error_t initialize(SrsRequest* /*r*/) {
+        return srs_success;
+    }
+    virtual srs_error_t on_publish() {
+        return *fail ? srs_error_new(ERROR_SYSTEM_STREAM_BUSY - 1, "mock bridge publish failed") : srs_success;
+    }
+    virtual srs_error_t on_frame(SrsSharedPtrMessage* /*frame*/) {
+        return srs_success;
+    }
+    virtual void on_unpublish() {
+    }
+};
+
+// Gives acquire_publish the server it hands the live source as handler, and removes the stream's sources from the
+// global pools when done.
+class MockSrtReleaseServer
+{
+public:
+    SrsHybridServer hybrid;
+    std::string url;
+private:
+    SrsHybridServer* saved_;
+public:
+    MockSrtReleaseServer(std::string u) : url(u) {
+        hybrid.register_server(new SrsServerAdapter());
+        saved_ = _srs_hybrid;
+        _srs_hybrid = &hybrid;
+    }
+    virtual ~MockSrtReleaseServer() {
+        _srs_hybrid = saved_;
+        _srs_srt_sources->pool.erase(url);
+        _srs_sources->pool.erase(url);
+    }
+};
+
+static SrsMpegtsSrtConn* mock_srt_release_conn(SrsRequest* req)
+{
+    SrsMpegtsSrtConn* conn = new SrsMpegtsSrtConn(NULL, -1, "127.0.0.1", 9000);
+    conn->req_->vhost = req->vhost;
+    conn->req_->app = req->app;
+    conn->req_->stream = req->stream;
+    srs_error_t err = _srs_srt_sources->fetch_or_create(conn->req_, conn->srt_source_);
+    srs_freep(err);
+    return conn;
+}
+
+// A publish that fails after the SRT source marked itself busy releases the stream, so the next publisher is
+// accepted instead of the stream staying busy until SRS restarts.
+VOID TEST(SrtPublishReleaseTest, FailedPublishReleasesTheStream)
+{
+    srs_error_t err;
+
+    MockTakeoverConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { srt { enabled on; srt_to_rtmp off; } }"));
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("release-failed"));
+    MockSrtReleaseServer server(req->get_stream_url());
+    SrsContextId cid = _srs_context->get_id();
+
+    bool fail = true;
+    SrsMpegtsSrtConn* first = mock_srt_release_conn(req.get());
+    std::string first_id = _srs_context->get_id().c_str();
+    first->srt_source_->set_bridge(new MockSrtReleaseBridge(&fail));
+    err = first->publishing();
+    EXPECT_TRUE(srs_error_desc(err).find("mock bridge publish failed") != std::string::npos);
+    srs_freep(err);
+    EXPECT_TRUE(first->srt_source_->can_publish());
+    SrsStatistic::instance()->on_disconnect(first_id, srs_success);
+    srs_freep(first);
+
+    fail = false;
+    SrsMpegtsSrtConn* second = mock_srt_release_conn(req.get());
+    HELPER_EXPECT_SUCCESS(second->acquire_publish());
+    second->release_publish();
+    srs_freep(second);
+
+    _srs_context->set_id(cid);
+}
+
+// Runs publishing() on its own coroutine, as a connection does.
+class MockSrtReleasePublisher : public ISrsCoroutineHandler
+{
+public:
+    SrsMpegtsSrtConn* conn;
+    bool done;
+public:
+    MockSrtReleasePublisher(SrsMpegtsSrtConn* c) : conn(c), done(false) {
+    }
+    virtual srs_error_t cycle() {
+        srs_error_t err = conn->publishing();
+        srs_freep(err);
+        done = true;
+        return srs_success;
+    }
+};
+
+// A publisher refused because the stream is busy, after a takeover that timed out, or because it was interrupted
+// while it waited to take over, leaves the source it was refused for to the publisher that holds it.
+VOID TEST(SrtPublishReleaseTest, RefusalNeverReleasesTheHolder)
+{
+    srs_error_t err;
+
+    for (int arm = 0; arm < 3; arm++) {
+        MockTakeoverConfig mc;
+        HELPER_ASSERT_SUCCESS(mc.conf.parse(std::string(_MIN_OK_CONF) + "vhost __defaultVhost__ { srt { enabled on; "
+            "srt_to_rtmp off; takeover " + (arm == 0 ? "off" : "on") + "; } }"));
+        const char* names[] = {"release-busy", "release-timeout", "release-interrupted"};
+        SrsUniquePtr<SrsRequest> req(mock_takeover_request(names[arm]));
+        MockSrtReleaseServer server(req->get_stream_url());
+        SrsContextId cid = _srs_context->get_id();
+
+        // Another publisher holds the stream, and does not go when told to.
+        MockTakeoverPublisher holder(std::string(names[arm]) + "-holder", true);
+        mock_takeover_publish(&holder, req.get());
+        SrsMpegtsSrtConn* conn = mock_srt_release_conn(req.get());
+        std::string conn_id = _srs_context->get_id().c_str();
+        conn->srt_source_->can_publish_ = false;
+
+        if (arm < 2) {
+            HELPER_EXPECT_FAILED(conn->publishing());
+        } else {
+            MockSrtReleasePublisher publisher(conn);
+            SrsSTCoroutine trd("publisher", &publisher, _srs_context->get_id());
+            HELPER_ASSERT_SUCCESS(trd.start());
+            srs_usleep(30 * SRS_UTIME_MILLISECONDS);
+            trd.interrupt();
+            for (int i = 0; i < 50 && !publisher.done; i++) {
+                srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+            }
+            EXPECT_TRUE(publisher.done);
+        }
+        EXPECT_FALSE(conn->srt_source_->can_publish()) << names[arm];
+        EXPECT_EQ(arm > 0, holder.expired) << names[arm];
+
+        conn->srt_source_->can_publish_ = true;
+        SrsStatistic::instance()->on_disconnect(conn_id, srs_success);
+        srs_freep(conn);
+        _srs_context->set_id(cid);
+    }
+}
+

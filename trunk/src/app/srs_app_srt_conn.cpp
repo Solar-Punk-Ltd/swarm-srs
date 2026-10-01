@@ -330,8 +330,18 @@ srs_error_t SrsMpegtsSrtConn::publishing()
         return srs_error_wrap(err, "srt: callback on publish");
     }
     
-    if ((err = acquire_publish()) == srs_success) {
+    srs_error_t acquire_err = acquire_publish();
+    if ((err = acquire_err) == srs_success) {
         err = do_publishing();
+    }
+
+    // Whatever the acquire result, release any publish state changed by this session, so a publish that failed
+    // after the source was marked busy does not leave the stream busy until restart. When the stream is busy, or
+    // this session was interrupted while it waited to take it over, another session owns it and must never be
+    // released here.
+    int acquire_code = srs_error_code(acquire_err);
+    if (acquire_code != ERROR_SRT_SOURCE_BUSY && acquire_code != ERROR_SYSTEM_STREAM_BUSY
+        && acquire_code != ERROR_THREAD_INTERRUPED) {
         release_publish();
     }
     
