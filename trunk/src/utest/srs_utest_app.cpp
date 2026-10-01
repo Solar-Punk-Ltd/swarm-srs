@@ -915,13 +915,18 @@ VOID TEST(AppSecurity, CheckSecurity)
 
 
 // Stands in for ffmpeg in the encoder tests. Like an ffmpeg whose input has stalled, it ignores SIGINT and
-// SIGTERM, so only SIGKILL stops it.
-#define MOCK_ENCODER_FFMPEG "/tmp/srs-utest-encoder-ffmpeg.sh"
+// SIGTERM, so only SIGKILL stops it. It lives beside the test binary rather than at a shared path.
+extern const char* _srs_binary;
+
+static std::string mock_encoder_ffmpeg()
+{
+    return srs_path_dirname(_srs_binary ? _srs_binary : "./srs_utest") + "/srs-utest-encoder-ffmpeg.sh";
+}
 
 static std::string mock_encoder_config(std::string hold)
 {
     return std::string(_MIN_OK_CONF) + "ff_log_dir /dev/null; vhost test.hold { transcode { enabled on; "
-        "ffmpeg " MOCK_ENCODER_FFMPEG "; " + hold +
+        "ffmpeg " + mock_encoder_ffmpeg() + "; " + hold +
         " engine a { enabled on; vcodec copy; acodec copy; output rtmp://127.0.0.1:[port]/[app]/[stream]_[engine]?vhost=abr.test; }"
         " engine b { enabled on; vcodec copy; acodec copy; output rtmp://127.0.0.1:[port]/[app]/[stream]_[engine]?vhost=abr.test; }"
         " } }";
@@ -959,14 +964,20 @@ VOID TEST(AppEncoderTest, UnpublishHoldConfig)
 // The tests below fork a process from a coroutine, which Cygwin's fork cannot do.
 #ifndef SRS_CYGWIN64
 
-static void mock_encoder_write_ffmpeg()
+// Returns whether the mock was written and made executable. It exits on its own once the test binary is gone, so
+// an interrupted run leaves nothing behind.
+static bool mock_encoder_write_ffmpeg()
 {
-    FILE* f = fopen(MOCK_ENCODER_FFMPEG, "w");
-    if (f) {
-        fprintf(f, "#!/bin/sh\ntrap '' INT TERM\nwhile true; do sleep 1; done\n");
-        fclose(f);
+    std::string path = mock_encoder_ffmpeg();
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) {
+        return false;
     }
-    chmod(MOCK_ENCODER_FFMPEG, 0755);
+    int written = fprintf(f, "#!/bin/sh\ntrap '' INT TERM\nwhile kill -0 $PPID 2>/dev/null; do sleep 1; done\n");
+    if (fclose(f) != 0 || written <= 0) {
+        return false;
+    }
+    return chmod(path.c_str(), 0755) == 0;
 }
 
 // Points _srs_config at a test config for the life of this object.
@@ -974,13 +985,15 @@ class MockEncoderConfig
 {
 public:
     MockSrsConfig conf;
+    // Each test asserts this, because a gtest assertion cannot live in a constructor.
+    bool ffmpeg_ready;
 private:
     SrsConfig* saved_;
 public:
     MockEncoderConfig() {
         saved_ = _srs_config;
         _srs_config = &conf;
-        mock_encoder_write_ffmpeg();
+        ffmpeg_ready = mock_encoder_write_ffmpeg();
     }
     virtual ~MockEncoderConfig() {
         _srs_config = saved_;
@@ -1034,6 +1047,7 @@ VOID TEST(AppEncoderTest, HoldThenReturnKeepsEngines)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1068,6 +1082,7 @@ VOID TEST(AppEncoderTest, HoldThenExpiryStopsEngines)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 1;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1105,6 +1120,7 @@ VOID TEST(AppEncoderTest, HoldZeroStopsWhenThePublisherLeaves)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 0;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1113,6 +1129,8 @@ VOID TEST(AppEncoderTest, HoldZeroStopsWhenThePublisherLeaves)
     mock_encoder_wait_started(&e);
     std::vector<int> pids = mock_encoder_pids(&e);
     ASSERT_EQ(2, (int)pids.size());
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[1]));
 
     e.hold_on_unpublish();
     EXPECT_EQ(0, e.hold_deadline_);
@@ -1127,6 +1145,7 @@ VOID TEST(AppEncoderTest, DestroyDuringHoldStopsEngines)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1151,6 +1170,7 @@ VOID TEST(AppEncoderTest, ReloadDuringHoldRestartsEngines)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1185,6 +1205,7 @@ VOID TEST(AppEncoderTest, HoldKeepsRestartingDeadEngines)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1220,6 +1241,7 @@ VOID TEST(AppEncoderTest, KillEnginesSkipsThePoliteStop)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1247,6 +1269,7 @@ VOID TEST(AppEncoderTest, FastKillMarksTheProcessStopped)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1273,6 +1296,7 @@ VOID TEST(AppEncoderTest, OriginHubHoldsAndQuitKills)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1301,6 +1325,7 @@ VOID TEST(AppEncoderTest, DisposeDuringHoldKillsEngines)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1359,6 +1384,7 @@ VOID TEST(AppEncoderTest, PublishDuringReloadStopGetsFreshEngines)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1395,6 +1421,7 @@ VOID TEST(AppEncoderTest, InterruptedStopStillWaitsForTheLoop)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 0;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
@@ -1426,6 +1453,7 @@ VOID TEST(AppEncoderTest, UnpublishDuringReloadStopDoesNotHold)
     srs_error_t err;
 
     MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
     HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
     SrsUniquePtr<SrsRequest> req(mock_encoder_request());
 
