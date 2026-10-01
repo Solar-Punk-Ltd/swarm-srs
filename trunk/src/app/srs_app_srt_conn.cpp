@@ -385,11 +385,15 @@ srs_error_t srs_srt_takeover_publisher(SrsRequest* req, srs_utime_t timeout)
         client->conn->expire();
     }
 
-    for (srs_utime_t waited = 0; stat->find_client(id); waited += 10 * SRS_UTIME_MILLISECONDS) {
-        if (waited >= timeout) {
+    srs_utime_t deadline = srs_update_system_time() + timeout;
+    while (stat->find_client(id)) {
+        if (srs_update_system_time() >= deadline) {
             return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "publisher %s of %s did not go in %dms", id.c_str(), req->get_stream_url().c_str(), srsu2msi(timeout));
         }
-        srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+        // An interrupted sleep means the caller's own connection is going, so it must not publish.
+        if (srs_usleep(10 * SRS_UTIME_MILLISECONDS) != 0) {
+            return srs_error_new(ERROR_THREAD_INTERRUPED, "interrupted while waiting for publisher %s of %s", id.c_str(), req->get_stream_url().c_str());
+        }
     }
 
     return srs_success;

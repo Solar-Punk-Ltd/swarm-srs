@@ -707,6 +707,90 @@ VOID TEST(SrtTakeoverTest, RefusesWhenThePublisherDoesNotGo)
     EXPECT_GE(elapsed, 50 * SRS_UTIME_MILLISECONDS);
 }
 
+// Holds the scheduler for a while each time it runs, as a busy server does, so a coroutine's short sleeps take
+// longer than asked.
+class MockTakeoverBusyServer : public ISrsCoroutineHandler
+{
+public:
+    bool quit;
+public:
+    MockTakeoverBusyServer() : quit(false) {
+    }
+    virtual srs_error_t cycle() {
+        while (!quit) {
+            ::usleep(30 * 1000);
+            srs_usleep(1 * SRS_UTIME_MILLISECONDS);
+        }
+        return srs_success;
+    }
+};
+
+// The bound is real time, not a count of nominal sleeps, so a busy server does not stretch it.
+VOID TEST(SrtTakeoverTest, TheBoundIsRealTime)
+{
+    srs_error_t err;
+
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-busy"));
+    MockTakeoverPublisher old("takeover-old-5", true);
+    mock_takeover_publish(&old, req.get());
+
+    MockTakeoverBusyServer busy;
+    SrsSTCoroutine trd("busy", &busy, _srs_context->get_id());
+    HELPER_ASSERT_SUCCESS(trd.start());
+
+    srs_utime_t starttime = srs_update_system_time();
+    HELPER_EXPECT_FAILED(srs_srt_takeover_publisher(req.get(), 100 * SRS_UTIME_MILLISECONDS));
+    srs_utime_t elapsed = srs_update_system_time() - starttime;
+    busy.quit = true;
+
+    // Counting ten nominal 10 ms sleeps here takes ten turns of the busy coroutine, about 400 ms.
+    EXPECT_LT(elapsed, 250 * SRS_UTIME_MILLISECONDS);
+}
+
+// Runs a takeover on its own coroutine, as a new connection does.
+class MockTakeoverCaller : public ISrsCoroutineHandler
+{
+public:
+    SrsRequest* req;
+    bool done;
+    srs_error_t result;
+public:
+    MockTakeoverCaller(SrsRequest* r) : req(r), done(false), result(srs_success) {
+    }
+    virtual ~MockTakeoverCaller() {
+        srs_freep(result);
+    }
+    virtual srs_error_t cycle() {
+        result = srs_srt_takeover_publisher(req, 5 * SRS_UTIME_SECONDS);
+        done = true;
+        return srs_success;
+    }
+};
+
+// A new connection that is itself interrupted while it waits, such as one kicked or taken over in turn, stops
+// waiting with an error instead of waiting out the bound.
+VOID TEST(SrtTakeoverTest, StopsWaitingWhenInterrupted)
+{
+    srs_error_t err;
+
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-interrupted"));
+    MockTakeoverPublisher old("takeover-old-6", true);
+    mock_takeover_publish(&old, req.get());
+
+    MockTakeoverCaller caller(req.get());
+    SrsSTCoroutine trd("caller", &caller, _srs_context->get_id());
+    HELPER_ASSERT_SUCCESS(trd.start());
+
+    srs_usleep(30 * SRS_UTIME_MILLISECONDS);
+    trd.interrupt();
+
+    for (int i = 0; i < 50 && !caller.done; i++) {
+        srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+    }
+    EXPECT_TRUE(caller.done);
+    EXPECT_TRUE(caller.result != srs_success);
+}
+
 // With no publisher on record there is nothing to take over.
 VOID TEST(SrtTakeoverTest, RefusesWithoutAPublisher)
 {
