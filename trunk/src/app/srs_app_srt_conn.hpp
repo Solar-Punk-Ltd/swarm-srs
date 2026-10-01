@@ -127,5 +127,11 @@ private:
     SrsSecurity* security_;
 };
 
+// Expire the client that the statistics record as the publisher of req's stream, of any protocol, and wait up
+// to timeout for it to go. A client goes only after its source is released and its on_unpublish hook has returned, so
+// waiting for the client rather than for a free source keeps the old publisher's on_unpublish ahead of the new
+// publish. Fails when there is no other publisher on record or it does not go in time.
+extern srs_error_t srs_srt_takeover_publisher(SrsRequest* req, srs_utime_t timeout);
+
 #endif
 

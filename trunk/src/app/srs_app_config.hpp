@@ -716,6 +716,10 @@ public:
     // TODO: FIXME: Rename to get_vhost_srt_enabled.
     bool get_srt_enabled(std::string vhost);
     bool get_srt_to_rtmp(std::string vhost);
+    // Whether an SRT publisher that the security rules and the on_publish hook let through takes over a busy
+    // stream from its current publisher, of any protocol. Off by default, because with no on_publish hook every
+    // publisher gets through.
+    bool get_srt_takeover(std::string vhost);
 
 // http_hooks section
 private:
@@ -808,7 +812,7 @@ public:
     // Get the ffmpeg tool path of transcode.
     virtual std::string get_transcode_ffmpeg(SrsConfDirective* conf);
     // Get how long the engines keep running after the publisher leaves, so a publisher
-    // that returns within it gets the same engines. 0 stops them at once.
+    // that returns within it can reuse them. 0 stops them when the publisher leaves.
     virtual srs_utime_t get_transcode_unpublish_hold(SrsConfDirective* conf);
     // Get the engines of transcode.
     virtual std::vector<SrsConfDirective*> get_transcode_engines(SrsConfDirective* conf);

@@ -4381,6 +4381,29 @@ VOID TEST(ConfigEnvTest, CheckEnvValuesVhostSrt)
         SrsSetEnvConfig(conf, srt_to_rtmp2, "SRS_VHOST_SRT_TO_RTMP", "off");
         EXPECT_FALSE(conf.get_srt_to_rtmp("__defaultVhost__"));
     }
+
+    // The takeover is off unless the env says on, and the env applies to every vhost, configured or not.
+    if (true) {
+        MockSrsConfig conf;
+        srs_error_t err;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { srt { enabled on; } }"));
+        EXPECT_FALSE(conf.get_srt_takeover("v"));
+        EXPECT_FALSE(conf.get_srt_takeover("__defaultVhost__"));
+
+        SrsSetEnvConfig(conf, srt_takeover, "SRS_VHOST_SRT_TAKEOVER", "on");
+        EXPECT_TRUE(conf.get_srt_takeover("v"));
+        EXPECT_TRUE(conf.get_srt_takeover("__defaultVhost__"));
+        EXPECT_TRUE(conf.get_srt_takeover("absent"));
+    }
+
+    if (true) {
+        MockSrsConfig conf;
+        srs_error_t err;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { srt { enabled on; takeover on; } }"));
+
+        SrsSetEnvConfig(conf, srt_takeover, "SRS_VHOST_SRT_TAKEOVER", "off");
+        EXPECT_FALSE(conf.get_srt_takeover("v"));
+    }
 }
 
 VOID TEST(ConfigEnvTest, CheckEnvValuesRtcServer)

@@ -3944,12 +3944,15 @@ VOID TEST(KernelCodecTest, VideoFormatSpsInvalidLengthSizeMinusOne)
         // The rejected sequence header still leaves the codec looking initialized, because
         // avc_extra_data is populated before any validation and is_avc_codec_ok() is just
         // !avc_extra_data.empty(). That is why the frame below reaches the demuxer at all
-        // instead of being dropped by the guard in video_nalu_demux.
+        // instead of being dropped by the guard in video_nalu_demux. This pins current behavior,
+        // not desired behavior, so a fix that drops the frame will fail this test on purpose.
         EXPECT_TRUE(f.vcodec->is_avc_codec_ok());
 
         // A following frame must return an error instead of aborting the process. The
         // payload must not start with an AnnexB start code, or try_annexb_first parses it
-        // as AnnexB and it never reaches the IBMF path where the assert lives.
+        // as AnnexB and it never reaches the IBMF path where the assert lives. The error
+        // itself comes from the truncated payload. What this asserts is that the frame
+        // returns an error at all rather than aborting.
         uint8_t frame[] = {
             0x27, // 2, Inter frame; 7, AVC.
             0x01, // 1, NALU.
@@ -4067,6 +4070,100 @@ VOID TEST(KernelCodecTest, VideoFormatHevcInvalidLengthSizeMinusOne)
         };
         HELPER_EXPECT_FAILED(f.on_video(0, (char*)frame, sizeof(frame)));
     }
+}
+
+// An HEVC sequence header whose hvcC carries one array of nal_type with a single one-byte NALU, nalu_header.
+static srs_error_t mock_hevc_one_byte_nalu(uint8_t nal_type, uint8_t nalu_header)
+{
+    srs_error_t err = srs_success;
+
+    SrsFormat f;
+    if ((err = f.initialize()) != srs_success) {
+        return err;
+    }
+
+    uint8_t sh[] = {
+        0x1c, // 1, Keyframe; 12, HEVC.
+        0x00, // 0, Sequence header.
+        0x00, 0x00, 0x00, // Timestamp.
+        0x01, // configuration_version, must be 1.
+        0x00, // profile_space, tier_flag, profile_idc.
+        0x00, 0x00, 0x00, 0x00, // general_profile_compatibility_flags.
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // general_constraint_indicator_flags.
+        0x00, // general_level_idc.
+        0x00, 0x00, // min_spatial_segmentation_idc.
+        0x00, // parallelism_type.
+        0x00, // chroma_format.
+        0x00, // bit_depth_luma_minus8.
+        0x00, // bit_depth_chroma_minus8.
+        0x00, 0x00, // avg_frame_rate.
+        0x03, // ..., length_size_minus_one
+        0x01, // numOfArrays.
+        nal_type, // array_completeness, nal_unit_type.
+        0x00, 0x01, // num_nalus.
+        0x00, 0x01, // nal_unit_length.
+        nalu_header, // The NAL unit header's first byte, and nothing after it.
+    };
+    return f.on_video(0, (char*)sh, sizeof(sh));
+}
+
+// A one-byte VPS, SPS or PPS NALU is cut off inside its NAL unit header, so the parser returns an error instead of
+// skipping past the end of the NALU, which aborts the server.
+VOID TEST(KernelCodecTest, VideoFormatHevcOneByteVps)
+{
+    srs_error_t err;
+    HELPER_EXPECT_FAILED(mock_hevc_one_byte_nalu(32, 0x40));
+}
+
+VOID TEST(KernelCodecTest, VideoFormatHevcOneByteSps)
+{
+    srs_error_t err;
+    HELPER_EXPECT_FAILED(mock_hevc_one_byte_nalu(33, 0x42));
+}
+
+VOID TEST(KernelCodecTest, VideoFormatHevcOneBytePps)
+{
+    srs_error_t err;
+    HELPER_EXPECT_FAILED(mock_hevc_one_byte_nalu(34, 0x44));
+}
+
+// Parses a profile_tier_level() with one sub-layer that has a profile of sub_layer_profile_idc and no level.
+static srs_error_t mock_hevc_ptl_one_sub_layer(uint8_t sub_layer_profile_idc, SrsHevcProfileTierLevel* ptl)
+{
+    uint8_t data[32] = {0};
+    // 12 bytes of general profile, tier and level, all zero, then sub_layer_profile_present_flag[0] = 1,
+    // sub_layer_level_present_flag[0] = 0 and seven reserved_zero_2bits.
+    data[12] = 0x80;
+    // The sub-layer's profile_space 0, tier_flag 0 and profile_idc, then zeros.
+    data[14] = sub_layer_profile_idc & 0x1f;
+
+    SrsFormat f;
+    SrsBuffer buf((char*)data, sizeof(data));
+    SrsBitBuffer bs(&buf);
+    return f.hevc_demux_rbsp_ptl(&bs, ptl, 1, 1);
+}
+
+// A sub-layer with profile 2 reads reserved_zero_7bits and reserved_zero_35bits, which must have room for it.
+VOID TEST(KernelCodecTest, HevcPtlSubLayerProfile2)
+{
+    srs_error_t err;
+
+    SrsHevcProfileTierLevel ptl;
+    HELPER_EXPECT_SUCCESS(mock_hevc_ptl_one_sub_layer(2, &ptl));
+    EXPECT_EQ(2, ptl.sub_layer_profile_idc[0]);
+    EXPECT_EQ(1, (int)ptl.sub_layer_reserved_zero_7bits.size());
+    EXPECT_EQ(1, (int)ptl.sub_layer_reserved_zero_35bits.size());
+}
+
+// A sub-layer with profile 5 reads reserved_zero_33bits, which must have room for it.
+VOID TEST(KernelCodecTest, HevcPtlSubLayerProfile5)
+{
+    srs_error_t err;
+
+    SrsHevcProfileTierLevel ptl;
+    HELPER_EXPECT_SUCCESS(mock_hevc_ptl_one_sub_layer(5, &ptl));
+    EXPECT_EQ(5, ptl.sub_layer_profile_idc[0]);
+    EXPECT_EQ(1, (int)ptl.sub_layer_reserved_zero_33bits.size());
 }
 
 // The HEVC equivalent of VideoFormatSpsInvalidLengthSizeMinusOneAfterValid: an accepted

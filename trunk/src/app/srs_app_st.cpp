@@ -241,6 +241,12 @@ void SrsFastCoroutine::stop()
     if (trd) {
         void* res = NULL;
         int r0 = srs_thread_join(trd, &res);
+        // A stopper that is interrupted while it waits, such as a connection expired during its own teardown, must
+        // keep waiting, or the coroutine would outlive the object it runs on. ST has already taken the stopper off
+        // the join queue and cleared the interrupt, so the join can simply be retried.
+        while (r0 && errno == EINTR) {
+            r0 = srs_thread_join(trd, &res);
+        }
         if (r0) {
             // By st_thread_join
             if (errno == EINVAL) srs_assert(!r0);

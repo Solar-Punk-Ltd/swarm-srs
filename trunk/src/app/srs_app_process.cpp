@@ -350,9 +350,18 @@ void SrsProcess::fast_kill()
         return;
     }
 
-    // Try to wait pid to avoid zombie FFMEPG.
+    // Wait for the killed process, as srs_kill_forced does after its SIGKILL, so it leaves no zombie and a later
+    // stop() neither signals a pid that may have been reused nor logs a SIGTERM stop that never happened.
     int status = 0;
-    waitpid(pid, &status, WNOHANG);
+    pid_t qpid = -1;
+    do {
+        qpid = waitpid(pid, &status, 0);
+    } while (qpid < 0 && errno == EINTR);
+
+    if (qpid == pid) {
+        is_started = false;
+        pid = -1;
+    }
 
     return;
 }
