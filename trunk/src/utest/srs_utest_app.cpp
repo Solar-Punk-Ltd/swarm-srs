@@ -1041,6 +1041,36 @@ static void mock_encoder_wait_started(SrsEncoder* e)
     }
 }
 
+// A publisher returning after the hold has run out, but before the encoder loop's next check has killed the engines,
+// still gets the same engines. That is the "up to 3 seconds later" full.conf documents.
+VOID TEST(AppEncoderTest, ReturnAfterDeadlineBeforeTheLoopKeepsEngines)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    ASSERT_TRUE(mc.ffmpeg_ready);
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e.hold_on_unpublish();
+    e.hold_deadline_ = srs_update_system_time() - 1;
+
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    EXPECT_EQ(0, e.hold_deadline_);
+    EXPECT_TRUE(pids == mock_encoder_pids(&e));
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[1]));
+
+    e.hold_on_unpublish();
+    e.dispose();
+}
+
 // A publisher that returns within the hold gets the same engines, still running, and no second set.
 VOID TEST(AppEncoderTest, HoldThenReturnKeepsEngines)
 {
