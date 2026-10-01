@@ -1167,8 +1167,8 @@ srs_error_t SrsFormat::hevc_demux_hvcc(SrsBuffer* stream)
     // 5.2.4.1.2 Semantics
     // The value of this field shall be one of 0, 1, or 3 corresponding to a
     // length encoded with 1, 2, or 4 bytes, respectively.
-    // Validate before assigning, so a rejected sequence header leaves no invalid state,
-    // neither in the codec config nor in the decoder configuration record.
+    // Validate before assigning, so a rejected sequence header cannot leave 2 in the codec config
+    // or in the decoder configuration record, where the next frame would hit the assert.
     if (length_size_minus_one == 2) {
         return srs_error_new(ERROR_HEVC_DECODE_ERROR, "sps lengthSizeMinusOne should never be 2");
     }
@@ -2181,7 +2181,7 @@ srs_error_t SrsFormat::avc_demux_sps_pps(SrsBuffer* stream)
     // 5.2.4.1.2 Semantics
     // The value of this field shall be one of 0, 1, or 3 corresponding to a
     // length encoded with 1, 2, or 4 bytes, respectively.
-    // Validate before assigning, so a rejected sequence header leaves no invalid state.
+    // Validate before assigning, so a rejected sequence header cannot leave 2 in NAL_unit_length.
     if (lengthSizeMinusOne == 2) {
         return srs_error_new(ERROR_HLS_DECODE_ERROR, "sps lengthSizeMinusOne should never be 2");
     }

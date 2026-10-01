@@ -3944,12 +3944,15 @@ VOID TEST(KernelCodecTest, VideoFormatSpsInvalidLengthSizeMinusOne)
         // The rejected sequence header still leaves the codec looking initialized, because
         // avc_extra_data is populated before any validation and is_avc_codec_ok() is just
         // !avc_extra_data.empty(). That is why the frame below reaches the demuxer at all
-        // instead of being dropped by the guard in video_nalu_demux.
+        // instead of being dropped by the guard in video_nalu_demux. This pins current behavior,
+        // not desired behavior, so a fix that drops the frame will fail this test on purpose.
         EXPECT_TRUE(f.vcodec->is_avc_codec_ok());
 
         // A following frame must return an error instead of aborting the process. The
         // payload must not start with an AnnexB start code, or try_annexb_first parses it
-        // as AnnexB and it never reaches the IBMF path where the assert lives.
+        // as AnnexB and it never reaches the IBMF path where the assert lives. The error
+        // itself comes from the truncated payload. What this asserts is that the frame
+        // returns an error at all rather than aborting.
         uint8_t frame[] = {
             0x27, // 2, Inter frame; 7, AVC.
             0x01, // 1, NALU.
