@@ -376,9 +376,11 @@ srs_error_t srs_srt_takeover_publisher(SrsRequest* req, srs_utime_t timeout)
         return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "no other publisher of %s on record", req->get_stream_url().c_str());
     }
 
+    // A publisher whose stream is already closed is leaving: wait for it rather than interrupt its teardown. An SRT
+    // publisher closes the stream before it stops anything, an RTMP one only after its hub has stopped.
     std::string id = stream->publisher_id;
     SrsStatisticClient* client = stat->find_client(id);
-    if (client && client->conn) {
+    if (client && client->conn && stream->active) {
         srs_trace("srt: take over %s from publisher %s", req->get_stream_url().c_str(), id.c_str());
         client->conn->expire();
     }

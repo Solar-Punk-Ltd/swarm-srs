@@ -601,6 +601,11 @@ public:
         if (hangs) {
             return;
         }
+        leave_soon();
+    }
+    // Leaves the statistics from its own coroutine after a short delay, as a connection does at the end of its
+    // teardown.
+    void leave_soon() {
         srs_freep(trd_);
         trd_ = new SrsSTCoroutine("old-publisher", this, _srs_context->get_id());
         srs_error_t err = trd_->start();
@@ -662,6 +667,24 @@ VOID TEST(SrtTakeoverTest, ExpiresThePublisherAndWaitsForIt)
 
     // The old publisher leaves only from its own coroutine, so finding it gone shows the takeover waited for it.
     EXPECT_TRUE(old.expired);
+    EXPECT_TRUE(SrsStatistic::instance()->find_client(old.id) == NULL);
+}
+
+// A publisher whose stream is already closed is leaving, so the takeover waits for it without interrupting its
+// teardown, which may be stopping engines or running its on_unpublish hook.
+VOID TEST(SrtTakeoverTest, WaitsForALeavingPublisherWithoutExpiringIt)
+{
+    srs_error_t err;
+
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-leaving"));
+    MockTakeoverPublisher old("takeover-old-4", false);
+    mock_takeover_publish(&old, req.get());
+    SrsStatistic::instance()->on_stream_close(req.get());
+    old.leave_soon();
+
+    HELPER_EXPECT_SUCCESS(srs_srt_takeover_publisher(req.get(), 5 * SRS_UTIME_SECONDS));
+
+    EXPECT_FALSE(old.expired);
     EXPECT_TRUE(SrsStatistic::instance()->find_client(old.id) == NULL);
 }
 
