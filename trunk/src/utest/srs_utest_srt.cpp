@@ -1020,7 +1020,7 @@ public:
         return srs_success;
     }
     virtual srs_error_t on_publish() {
-        return *fail ? srs_error_new(ERROR_SYSTEM_STREAM_BUSY - 1, "mock bridge publish failed") : srs_success;
+        return *fail ? srs_error_new(ERROR_SRT_CONN, "mock bridge publish failed") : srs_success;
     }
     virtual srs_error_t on_frame(SrsSharedPtrMessage* /*frame*/) {
         return srs_success;
