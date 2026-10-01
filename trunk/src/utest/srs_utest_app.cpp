@@ -950,7 +950,8 @@ static bool mock_encoder_pid_alive(int pid)
     return pid > 0 && kill(pid, 0) == 0;
 }
 
-// Waits for the encoder coroutine to start every engine.
+// Waits up to about a second for every engine to count as started, and returns without failing, so a slow
+// start shows up in the caller's own checks.
 static void mock_encoder_wait_started(SrsEncoder* e)
 {
     for (int i = 0; i < 100; i++) {
@@ -1000,7 +1001,7 @@ VOID TEST(AppEncoderTest, HoldThenReturnKeepsEngines)
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
 
-// Nobody returns, so the encoder loop stops the engines once the hold runs out.
+// Nobody returns, so the encoder loop kills the engines at its first check after the hold runs out.
 VOID TEST(AppEncoderTest, HoldThenExpiryStopsEngines)
 {
     srs_error_t err;
@@ -1038,7 +1039,7 @@ VOID TEST(AppEncoderTest, HoldThenExpiryStopsEngines)
 }
 
 // A hold of 0 is the behaviour without the hold: the engines stop when the publisher leaves.
-VOID TEST(AppEncoderTest, HoldZeroStopsAtOnce)
+VOID TEST(AppEncoderTest, HoldZeroStopsWhenThePublisherLeaves)
 {
     srs_error_t err;
 
@@ -1059,7 +1060,7 @@ VOID TEST(AppEncoderTest, HoldZeroStopsAtOnce)
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
 
-// A source destroyed during the hold stops its engines at once.
+// A source destroyed during the hold kills its engines at once.
 VOID TEST(AppEncoderTest, DestroyDuringHoldStopsEngines)
 {
     srs_error_t err;
@@ -1082,7 +1083,7 @@ VOID TEST(AppEncoderTest, DestroyDuringHoldStopsEngines)
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
 
-// A transcode reload during the hold, which calls on_unpublish, stops the held engines at once, and the next
+// A transcode reload during the hold, which calls on_unpublish, kills the held engines at once, and the next
 // publish starts a fresh set rather than resuming the hold.
 VOID TEST(AppEncoderTest, ReloadDuringHoldRestartsEngines)
 {
@@ -1115,8 +1116,9 @@ VOID TEST(AppEncoderTest, ReloadDuringHoldRestartsEngines)
     e.on_unpublish();
 }
 
-// An engine that dies during the hold, as a rung ffmpeg does when its idle output is cut, is restarted by the
-// encoder loop after the publisher returns.
+// An engine that dies while held is restarted by the encoder loop, which keeps running through the hold. An
+// engine whose idle output SRS cut during the hold dies on its first write after the publisher returns, so the
+// test kills one during the hold and checks the restart after the return.
 VOID TEST(AppEncoderTest, HoldKeepsRestartingDeadEngines)
 {
     srs_error_t err;
@@ -1150,9 +1152,9 @@ VOID TEST(AppEncoderTest, HoldKeepsRestartingDeadEngines)
     e.on_unpublish();
 }
 
-// Held engines have nothing to flush, so the expiry kills them all at once instead of giving each one the
-// polite SIGTERM wait, which an ffmpeg with a stalled input ignores.
-VOID TEST(AppEncoderTest, HoldExpiryKillsEnginesAtOnce)
+// kill_engines, which the hold expiry calls, kills every engine at once instead of giving each one the polite
+// SIGTERM wait, which an ffmpeg with a stalled input ignores.
+VOID TEST(AppEncoderTest, KillEnginesSkipsThePoliteStop)
 {
     srs_error_t err;
 
