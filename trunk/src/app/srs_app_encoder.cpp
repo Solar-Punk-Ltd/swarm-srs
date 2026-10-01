@@ -48,7 +48,8 @@ srs_error_t SrsEncoder::on_publish(SrsRequest* req)
         return err;
     }
 
-    // Reap what an expired hold left, the finished loop and any engine it did not get to.
+    // Not keeping engines, so start clean: wait for a stop already running, such as a reload's, or reap
+    // the loop an expired hold has finished.
     on_unpublish();
     
     // parse the transcode engines for vhost and app and stream.
@@ -132,7 +133,7 @@ srs_error_t SrsEncoder::cycle()
         }
 
         if (hold_deadline_ > 0 && srs_update_system_time() >= hold_deadline_) {
-            srs_trace("Encoder: hold of %s expired, stop %d engines", input_stream_name.c_str(), (int)ffmpegs.size());
+            srs_trace("Encoder: hold of %s expired, kill %d engines", input_stream_name.c_str(), (int)ffmpegs.size());
             hold_deadline_ = 0;
             kill_engines();
             break;

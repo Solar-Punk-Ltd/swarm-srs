@@ -810,7 +810,7 @@ public:
     // Get the ffmpeg tool path of transcode.
     virtual std::string get_transcode_ffmpeg(SrsConfDirective* conf);
     // Get how long the engines keep running after the publisher leaves, so a publisher
-    // that returns within it gets the same engines. 0 stops them at once.
+    // that returns within it can reuse them. 0 stops them when the publisher leaves.
     virtual srs_utime_t get_transcode_unpublish_hold(SrsConfDirective* conf);
     // Get the engines of transcode.
     virtual std::vector<SrsConfDirective*> get_transcode_engines(SrsConfDirective* conf);
