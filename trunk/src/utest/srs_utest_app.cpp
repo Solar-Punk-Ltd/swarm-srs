@@ -1239,6 +1239,33 @@ VOID TEST(AppEncoderTest, KillEnginesSkipsThePoliteStop)
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
 
+// A process that fast_kill has killed and reaped counts as stopped, so the stop that follows neither signals its
+// pid, which may belong to another process by then, nor logs a SIGTERM stop that never happened.
+VOID TEST(AppEncoderTest, FastKillMarksTheProcessStopped)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    e.fast_kill_engines();
+
+    ASSERT_EQ(2, (int)e.ffmpegs.size());
+    for (int i = 0; i < (int)e.ffmpegs.size(); i++) {
+        EXPECT_FALSE(e.ffmpegs[i]->process->started());
+        EXPECT_EQ(-1, e.ffmpegs[i]->process->get_pid());
+        EXPECT_FALSE(mock_encoder_pid_alive(pids[i]));
+    }
+    e.kill_engines();
+}
+
 // Shutting down during the hold kills the held engines at once, and leaves engines with a publisher as they are.
 VOID TEST(AppEncoderTest, DisposeDuringHoldKillsEngines)
 {
