@@ -398,8 +398,10 @@ srs_error_t SrsMpegtsSrtConn::acquire_publish()
 {
     srs_error_t err = srs_success;
 
-    // The on_publish hook has accepted this publisher, so it may replace one the stream still has, such as an
-    // encoder whose network died without closing. If that fails, the checks below refuse as before.
+    // publishing() has already run the security check and the on_publish hook, so only a publisher they let
+    // through gets here. With the takeover on, it may replace a publisher the stream still has, such as an encoder
+    // whose network died without closing. If the old one does not go in time, the checks below refuse this one,
+    // though the old one has already been told to go.
     if (_srs_config->get_srt_takeover(req_->vhost)) {
         SrsSharedPtr<SrsLiveSource> live = _srs_sources->fetch(req_);
         if (!srt_source_->can_publish() || (live.get() && !live->can_publish(false))) {

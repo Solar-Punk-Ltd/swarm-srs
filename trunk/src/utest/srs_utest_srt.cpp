@@ -648,7 +648,8 @@ VOID TEST(SrtTakeoverTest, ConfigDefaultOffAndOn)
     }
 }
 
-// The old publisher is expired, and the takeover returns only once it is gone, so its on_unpublish has completed.
+// The old publisher is expired, and the takeover returns only once it is gone, which for a real connection is
+// after its on_unpublish hook.
 VOID TEST(SrtTakeoverTest, ExpiresThePublisherAndWaitsForIt)
 {
     srs_error_t err;
