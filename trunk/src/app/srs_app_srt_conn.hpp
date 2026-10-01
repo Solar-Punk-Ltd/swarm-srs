@@ -127,5 +127,9 @@ private:
     SrsSecurity* security_;
 };
 
+// Expire the client that publishes the stream of req, and wait up to timeout for it to go, which is after its
+// on_unpublish hook. Fails when there is no other publisher on record or it does not go in time.
+extern srs_error_t srs_srt_takeover_publisher(SrsRequest* req, srs_utime_t timeout);
+
 #endif
 

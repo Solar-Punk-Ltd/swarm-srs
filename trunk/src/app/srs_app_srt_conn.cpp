@@ -365,10 +365,50 @@ srs_error_t SrsMpegtsSrtConn::playing()
     return err;
 }
 
+// How long a publisher taking over a busy stream waits for the old one to go.
+#define SRS_SRT_TAKEOVER_TIMEOUT (5 * SRS_UTIME_SECONDS)
+
+srs_error_t srs_srt_takeover_publisher(SrsRequest* req, srs_utime_t timeout)
+{
+    SrsStatistic* stat = SrsStatistic::instance();
+    SrsStatisticStream* stream = stat->find_stream_by_url(req->get_stream_url());
+    if (!stream || stream->publisher_id.empty() || stream->publisher_id == _srs_context->get_id().c_str()) {
+        return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "no other publisher of %s on record", req->get_stream_url().c_str());
+    }
+
+    std::string id = stream->publisher_id;
+    SrsStatisticClient* client = stat->find_client(id);
+    if (client && client->conn) {
+        srs_trace("srt: take over %s from publisher %s", req->get_stream_url().c_str(), id.c_str());
+        client->conn->expire();
+    }
+
+    for (srs_utime_t waited = 0; stat->find_client(id); waited += 10 * SRS_UTIME_MILLISECONDS) {
+        if (waited >= timeout) {
+            return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "publisher %s of %s did not go in %dms", id.c_str(), req->get_stream_url().c_str(), srsu2msi(timeout));
+        }
+        srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+    }
+
+    return srs_success;
+}
+
 // TODO: FIXME: It's not atomic and has risk between multiple source checking.
 srs_error_t SrsMpegtsSrtConn::acquire_publish()
 {
     srs_error_t err = srs_success;
+
+    // The on_publish hook has accepted this publisher, so it may replace one the stream still has, such as an
+    // encoder whose network died without closing. If that fails, the checks below refuse as before.
+    if (_srs_config->get_srt_takeover(req_->vhost)) {
+        SrsSharedPtr<SrsLiveSource> live = _srs_sources->fetch(req_);
+        if (!srt_source_->can_publish() || (live.get() && !live->can_publish(false))) {
+            if ((err = srs_srt_takeover_publisher(req_, SRS_SRT_TAKEOVER_TIMEOUT)) != srs_success) {
+                srs_warn("srt: no takeover, %s", srs_error_desc(err).c_str());
+                srs_freep(err);
+            }
+        }
+    }
 
     // Check srt stream is busy.
     if (! srt_source_->can_publish()) {

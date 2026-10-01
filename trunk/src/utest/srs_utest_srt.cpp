@@ -12,6 +12,12 @@
 #include <srs_app_srt_utility.hpp>
 #include <srs_app_srt_server.hpp>
 #include <srs_core_autofree.hpp>
+#include <srs_app_srt_conn.hpp>
+#include <srs_app_statistic.hpp>
+#include <srs_app_st.hpp>
+#include <srs_app_conn.hpp>
+#include <srs_app_config.hpp>
+#include <srs_utest_config.hpp>
 
 #include <sstream>
 #include <vector>
@@ -552,3 +558,166 @@ VOID TEST(ServiceSRTTest, Encrypt)
 // TODO: FIXME: add mpegts conn test
 // set srt option, recv srt client, get srt client opt and check.
 
+// Points _srs_config at a test config for the life of this object.
+class MockTakeoverConfig
+{
+public:
+    MockSrsConfig conf;
+private:
+    SrsConfig* saved_;
+public:
+    MockTakeoverConfig() {
+        saved_ = _srs_config;
+        _srs_config = &conf;
+    }
+    virtual ~MockTakeoverConfig() {
+        _srs_config = saved_;
+    }
+};
+
+// Stands in for the old publisher's connection. When expired it goes after a short delay, as a real connection
+// does once its read is interrupted, unless it is told to hang on.
+class MockTakeoverPublisher : public ISrsExpire, public ISrsCoroutineHandler
+{
+public:
+    std::string id;
+    bool expired;
+    bool hangs;
+private:
+    SrsCoroutine* trd_;
+public:
+    MockTakeoverPublisher(std::string v, bool hang) {
+        id = v;
+        expired = false;
+        hangs = hang;
+        trd_ = new SrsDummyCoroutine();
+    }
+    virtual ~MockTakeoverPublisher() {
+        srs_freep(trd_);
+        SrsStatistic::instance()->on_disconnect(id, srs_success);
+    }
+    virtual void expire() {
+        expired = true;
+        if (hangs) {
+            return;
+        }
+        srs_freep(trd_);
+        trd_ = new SrsSTCoroutine("old-publisher", this, _srs_context->get_id());
+        srs_error_t err = trd_->start();
+        srs_freep(err);
+    }
+    virtual srs_error_t cycle() {
+        srs_usleep(30 * SRS_UTIME_MILLISECONDS);
+        SrsStatistic::instance()->on_disconnect(id, srs_success);
+        return srs_success;
+    }
+};
+
+static SrsRequest* mock_takeover_request(std::string stream)
+{
+    SrsRequest* req = new SrsRequest();
+    req->vhost = "__defaultVhost__";
+    req->app = "live";
+    req->stream = stream;
+    return req;
+}
+
+static void mock_takeover_publish(MockTakeoverPublisher* old, SrsRequest* req)
+{
+    SrsStatistic* stat = SrsStatistic::instance();
+    srs_error_t err = stat->on_client(old->id, req, old, SrsSrtConnPublish);
+    srs_freep(err);
+    stat->on_stream_publish(req, old->id);
+}
+
+VOID TEST(SrtTakeoverTest, ConfigDefaultOn)
+{
+    srs_error_t err;
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { srt { enabled on; } }"));
+        EXPECT_TRUE(conf.get_srt_takeover("v"));
+        EXPECT_TRUE(conf.get_srt_takeover("absent"));
+    }
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { srt { enabled on; takeover off; } }"));
+        EXPECT_FALSE(conf.get_srt_takeover("v"));
+    }
+}
+
+// The old publisher is expired, and the takeover returns only once it is gone, so its on_unpublish has completed.
+VOID TEST(SrtTakeoverTest, ExpiresThePublisherAndWaitsForIt)
+{
+    srs_error_t err;
+
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-waits"));
+    MockTakeoverPublisher old("takeover-old-1", false);
+    mock_takeover_publish(&old, req.get());
+
+    HELPER_EXPECT_SUCCESS(srs_srt_takeover_publisher(req.get(), 5 * SRS_UTIME_SECONDS));
+
+    // The old publisher leaves only from its own coroutine, so finding it gone shows the takeover waited for it.
+    EXPECT_TRUE(old.expired);
+    EXPECT_TRUE(SrsStatistic::instance()->find_client(old.id) == NULL);
+}
+
+// An old publisher that does not go within the bound is not taken over, so the publish is refused as before.
+VOID TEST(SrtTakeoverTest, RefusesWhenThePublisherDoesNotGo)
+{
+    srs_error_t err;
+
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-hangs"));
+    MockTakeoverPublisher old("takeover-old-2", true);
+    mock_takeover_publish(&old, req.get());
+
+    srs_utime_t starttime = srs_update_system_time();
+    HELPER_EXPECT_FAILED(srs_srt_takeover_publisher(req.get(), 100 * SRS_UTIME_MILLISECONDS));
+    srs_utime_t elapsed = srs_update_system_time() - starttime;
+
+    EXPECT_TRUE(old.expired);
+    EXPECT_TRUE(SrsStatistic::instance()->find_client(old.id) != NULL);
+    EXPECT_GE(elapsed, 100 * SRS_UTIME_MILLISECONDS);
+}
+
+// With no publisher on record there is nothing to take over.
+VOID TEST(SrtTakeoverTest, RefusesWithoutAPublisher)
+{
+    srs_error_t err;
+
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-none"));
+    HELPER_EXPECT_FAILED(srs_srt_takeover_publisher(req.get(), 100 * SRS_UTIME_MILLISECONDS));
+}
+
+// A publisher the on_publish hook refuses is turned away before the busy check, so it never expires the publisher
+// it would have replaced.
+VOID TEST(SrtTakeoverTest, RefusedPublisherNeverTakesOver)
+{
+    srs_error_t err;
+
+    MockTakeoverConfig mc;
+    // Nothing listens on port 1, so the hook fails, which SRS treats as a refusal.
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { srt { enabled on; } "
+        "http_hooks { enabled on; on_publish http://127.0.0.1:1/refuse; } }"));
+
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-refused"));
+    MockTakeoverPublisher old("takeover-old-3", false);
+    mock_takeover_publish(&old, req.get());
+
+    SrsContextId cid = _srs_context->get_id();
+    SrsMpegtsSrtConn* conn = new SrsMpegtsSrtConn(NULL, -1, "127.0.0.1", 9000);
+    std::string new_id = _srs_context->get_id().c_str();
+    conn->req_->vhost = req->vhost;
+    conn->req_->app = req->app;
+    conn->req_->stream = req->stream;
+
+    HELPER_EXPECT_FAILED(conn->publishing());
+    EXPECT_FALSE(old.expired);
+    EXPECT_TRUE(SrsStatistic::instance()->find_client(old.id) != NULL);
+
+    SrsStatistic::instance()->on_disconnect(new_id, srs_success);
+    srs_freep(conn);
+    _srs_context->set_id(cid);
+}

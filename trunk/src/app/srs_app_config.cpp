@@ -2752,7 +2752,7 @@ srs_error_t SrsConfig::check_normal_config()
             } else if (n == "srt") {
                 for (int j = 0; j < (int)conf->directives.size(); j++) {
                     string m = conf->at(j)->name;
-                    if (m != "enabled" && m != "srt_to_rtmp") {
+                    if (m != "enabled" && m != "srt_to_rtmp" && m != "takeover") {
                         return srs_error_new(ERROR_SYSTEM_CONFIG_INVALID, "illegal vhost.srt.%s of %s", m.c_str(), vhost->arg0().c_str());
                     }
                 }
@@ -8337,6 +8337,25 @@ bool SrsConfig::get_srt_to_rtmp(std::string vhost)
     }
 
     return SRS_CONF_PREFER_FALSE(conf->arg0());
+}
+
+bool SrsConfig::get_srt_takeover(std::string vhost)
+{
+    SRS_OVERWRITE_BY_ENV_BOOL2("srs.vhost.srt.takeover"); // SRS_VHOST_SRT_TAKEOVER
+
+    static bool DEFAULT = true;
+
+    SrsConfDirective* conf = get_srt(vhost);
+    if (!conf) {
+        return DEFAULT;
+    }
+
+    conf = conf->get("takeover");
+    if (!conf || conf->arg0().empty()) {
+        return DEFAULT;
+    }
+
+    return SRS_CONF_PREFER_TRUE(conf->arg0());
 }
 
 bool SrsConfig::get_http_stream_enabled()

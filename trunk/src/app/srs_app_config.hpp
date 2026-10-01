@@ -716,6 +716,8 @@ public:
     // TODO: FIXME: Rename to get_vhost_srt_enabled.
     bool get_srt_enabled(std::string vhost);
     bool get_srt_to_rtmp(std::string vhost);
+    // Whether a publisher accepted by the on_publish hook replaces the SRT publisher of a busy stream.
+    bool get_srt_takeover(std::string vhost);
 
 // http_hooks section
 private:
