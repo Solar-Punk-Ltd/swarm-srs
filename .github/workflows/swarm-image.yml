@@ -1,8 +1,8 @@
 name: "Swarm image"
 
 # Builds the root Dockerfile for linux/amd64 and pushes it to the GitHub container registry.
-# It runs only when started by hand, so no push or tag starts it. Upstream's release.yml beside it still
-# starts on any pushed tag that matches v6*.
+# It runs only when started by hand, so no push or tag starts it. Upstream's release.yml beside it, which
+# starts on any pushed tag that matches v6*, is disabled in this repository's Actions settings.
 on:
   workflow_dispatch:
     inputs:
