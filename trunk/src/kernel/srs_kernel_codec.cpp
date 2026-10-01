@@ -1281,6 +1281,9 @@ srs_error_t SrsFormat::hevc_demux_vps(SrsBuffer *stream)
     }
 
     // nuh_layer_id + nuh_temporal_id_plus1
+    if (!stream->require(1)) {
+        return srs_error_new(ERROR_HEVC_DECODE_ERROR, "decode hevc vps requires 1 only %d bytes", stream->left());
+    }
     stream->skip(1);
 
     // decode the rbsp from vps.
@@ -1410,6 +1413,9 @@ srs_error_t SrsFormat::hevc_demux_sps(SrsBuffer *stream)
     }
 
     // nuh_layer_id + nuh_temporal_id_plus1
+    if (!stream->require(1)) {
+        return srs_error_new(ERROR_HEVC_DECODE_ERROR, "decode hevc sps requires 1 only %d bytes", stream->left());
+    }
     stream->skip(1);
 
     // decode the rbsp from sps.
@@ -1596,6 +1602,9 @@ srs_error_t SrsFormat::hevc_demux_pps(SrsBuffer *stream)
     }
 
     // nuh_layer_id + nuh_temporal_id_plus1
+    if (!stream->require(1)) {
+        return srs_error_new(ERROR_HEVC_DECODE_ERROR, "decode hevc pps requires 1 only %d bytes", stream->left());
+    }
     stream->skip(1);
 
     // decode the rbsp from pps.

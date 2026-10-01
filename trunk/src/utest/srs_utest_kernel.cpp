@@ -4072,6 +4072,61 @@ VOID TEST(KernelCodecTest, VideoFormatHevcInvalidLengthSizeMinusOne)
     }
 }
 
+// An HEVC sequence header whose hvcC carries one array of nal_type with a single one-byte NALU, nalu_header.
+static srs_error_t mock_hevc_one_byte_nalu(uint8_t nal_type, uint8_t nalu_header)
+{
+    srs_error_t err = srs_success;
+
+    SrsFormat f;
+    if ((err = f.initialize()) != srs_success) {
+        return err;
+    }
+
+    uint8_t sh[] = {
+        0x1c, // 1, Keyframe; 12, HEVC.
+        0x00, // 0, Sequence header.
+        0x00, 0x00, 0x00, // Timestamp.
+        0x01, // configuration_version, must be 1.
+        0x00, // profile_space, tier_flag, profile_idc.
+        0x00, 0x00, 0x00, 0x00, // general_profile_compatibility_flags.
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // general_constraint_indicator_flags.
+        0x00, // general_level_idc.
+        0x00, 0x00, // min_spatial_segmentation_idc.
+        0x00, // parallelism_type.
+        0x00, // chroma_format.
+        0x00, // bit_depth_luma_minus8.
+        0x00, // bit_depth_chroma_minus8.
+        0x00, 0x00, // avg_frame_rate.
+        0x03, // ..., length_size_minus_one
+        0x01, // numOfArrays.
+        nal_type, // array_completeness, nal_unit_type.
+        0x00, 0x01, // num_nalus.
+        0x00, 0x01, // nal_unit_length.
+        nalu_header, // The NAL unit header's first byte, and nothing after it.
+    };
+    return f.on_video(0, (char*)sh, sizeof(sh));
+}
+
+// A one-byte VPS, SPS or PPS NALU is cut off inside its NAL unit header, so the parser returns an error instead of
+// skipping past the end of the NALU, which aborts the server.
+VOID TEST(KernelCodecTest, VideoFormatHevcOneByteVps)
+{
+    srs_error_t err;
+    HELPER_EXPECT_FAILED(mock_hevc_one_byte_nalu(32, 0x40));
+}
+
+VOID TEST(KernelCodecTest, VideoFormatHevcOneByteSps)
+{
+    srs_error_t err;
+    HELPER_EXPECT_FAILED(mock_hevc_one_byte_nalu(33, 0x42));
+}
+
+VOID TEST(KernelCodecTest, VideoFormatHevcOneBytePps)
+{
+    srs_error_t err;
+    HELPER_EXPECT_FAILED(mock_hevc_one_byte_nalu(34, 0x44));
+}
+
 // The HEVC equivalent of VideoFormatSpsInvalidLengthSizeMinusOneAfterValid: an accepted
 // hvcC establishes a valid length_size_minus_one, and a later malformed one must not
 // overwrite it, in vcodec->NAL_unit_length nor in the decoder configuration record.
