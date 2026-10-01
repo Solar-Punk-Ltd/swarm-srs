@@ -6076,7 +6076,7 @@ string SrsConfig::get_transcode_ffmpeg(SrsConfDirective* conf)
 
 srs_utime_t SrsConfig::get_transcode_unpublish_hold(SrsConfDirective* conf)
 {
-    static srs_utime_t DEFAULT = 60 * SRS_UTIME_SECONDS;
+    static srs_utime_t DEFAULT = 0;
     
     if (!conf) {
         return DEFAULT;

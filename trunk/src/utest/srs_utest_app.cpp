@@ -941,7 +941,9 @@ VOID TEST(AppEncoderTest, UnpublishHoldConfig)
         HELPER_ASSERT_SUCCESS(conf.parse(mock_encoder_config("")));
         SrsConfDirective* transcode = conf.get_transcode("test.hold", "");
         ASSERT_TRUE(transcode != NULL);
-        EXPECT_EQ(60 * SRS_UTIME_SECONDS, conf.get_transcode_unpublish_hold(transcode));
+        // Off by default, so a config without the directive behaves as stock SRS.
+        EXPECT_EQ(0, conf.get_transcode_unpublish_hold(transcode));
+        EXPECT_EQ(0, conf.get_transcode_unpublish_hold(NULL));
     }
 
     if (true) {
