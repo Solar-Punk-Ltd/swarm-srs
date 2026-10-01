@@ -19,6 +19,7 @@ using namespace std;
 #include <srs_app_encoder.hpp>
 #include <srs_app_ffmpeg.hpp>
 #include <srs_app_process.hpp>
+#include <srs_app_source.hpp>
 #include <srs_protocol_rtmp_stack.hpp>
 #include <srs_core_autofree.hpp>
 #include <srs_kernel_utility.hpp>
@@ -1264,6 +1265,34 @@ VOID TEST(AppEncoderTest, FastKillMarksTheProcessStopped)
         EXPECT_FALSE(mock_encoder_pid_alive(pids[i]));
     }
     e.kill_engines();
+}
+
+// The origin hub holds the engines when the publisher leaves, and the server's quit kills them.
+VOID TEST(AppEncoderTest, OriginHubHoldsAndQuitKills)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 60;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsSharedPtr<SrsLiveSource> source(new SrsLiveSource());
+    SrsUniquePtr<SrsOriginHub> hub(new SrsOriginHub());
+    HELPER_ASSERT_SUCCESS(hub->initialize(source, req.get()));
+    HELPER_ASSERT_SUCCESS(hub->on_publish());
+    mock_encoder_wait_started(hub->encoder);
+    std::vector<int> pids = mock_encoder_pids(hub->encoder);
+    ASSERT_EQ(2, (int)pids.size());
+
+    hub->on_unpublish();
+    EXPECT_TRUE(hub->encoder->hold_deadline_ > 0);
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_TRUE(mock_encoder_pid_alive(pids[1]));
+
+    hub->dispose();
+    EXPECT_TRUE(hub->encoder->ffmpegs.empty());
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
 
 // Shutting down during the hold kills the held engines at once, and leaves engines with a publisher as they are.
