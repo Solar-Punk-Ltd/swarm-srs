@@ -653,6 +653,84 @@ VOID TEST(SrtTakeoverTest, ConfigDefaultOffAndOn)
     }
 }
 
+// Keeps the warnings logged while it is installed.
+class MockTakeoverWarnLog : public ISrsLog
+{
+public:
+    std::vector<std::string> warnings;
+private:
+    ISrsLog* saved_;
+public:
+    MockTakeoverWarnLog() {
+        saved_ = _srs_log;
+        _srs_log = this;
+    }
+    virtual ~MockTakeoverWarnLog() {
+        _srs_log = saved_;
+    }
+    virtual srs_error_t initialize() {
+        return srs_success;
+    }
+    virtual void reopen() {
+    }
+    virtual void log(SrsLogLevel level, const char* /*tag*/, const SrsContextId& /*context_id*/, const char* fmt, va_list args) {
+        if (level != SrsLogLevelWarn) {
+            return;
+        }
+        char buf[1024];
+        vsnprintf(buf, sizeof(buf), fmt, args);
+        warnings.push_back(buf);
+    }
+    int count(std::string text) {
+        int n = 0;
+        for (int i = 0; i < (int)warnings.size(); i++) {
+            if (warnings[i].find(text) != std::string::npos) {
+                n++;
+            }
+        }
+        return n;
+    }
+};
+
+// Turning the takeover on without an on_publish hook is allowed, but warned about, because then any publisher the
+// security rules allow can take a live stream over.
+VOID TEST(SrtTakeoverTest, WarnsWhenOnWithoutAPublishHook)
+{
+    srs_error_t err;
+
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost nohooks { srt { enabled on; takeover on; } }"));
+        EXPECT_EQ(1, log.count("takeover of nohooks"));
+    }
+
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost hooksoff { srt { enabled on; takeover on; } "
+            "http_hooks { enabled off; on_publish http://127.0.0.1:8085/api/v1/streams; } }"));
+        EXPECT_EQ(1, log.count("takeover of hooksoff"));
+    }
+
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost nourl { srt { enabled on; takeover on; } "
+            "http_hooks { enabled on; on_publish; } }"));
+        EXPECT_EQ(1, log.count("takeover of nourl"));
+    }
+
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost hooked { srt { enabled on; takeover on; } "
+            "http_hooks { enabled on; on_publish http://127.0.0.1:8085/api/v1/streams; } } "
+            "vhost off { srt { enabled on; } }"));
+        EXPECT_EQ(0, log.count("takeover of"));
+    }
+}
+
 // The old publisher is expired, and the takeover returns only once it is gone, which for a real connection is
 // after its on_unpublish hook.
 VOID TEST(SrtTakeoverTest, ExpiresThePublisherAndWaitsForIt)
