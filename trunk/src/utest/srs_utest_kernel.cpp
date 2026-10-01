@@ -4127,6 +4127,45 @@ VOID TEST(KernelCodecTest, VideoFormatHevcOneBytePps)
     HELPER_EXPECT_FAILED(mock_hevc_one_byte_nalu(34, 0x44));
 }
 
+// Parses a profile_tier_level() with one sub-layer that has a profile of sub_layer_profile_idc and no level.
+static srs_error_t mock_hevc_ptl_one_sub_layer(uint8_t sub_layer_profile_idc, SrsHevcProfileTierLevel* ptl)
+{
+    uint8_t data[32] = {0};
+    // 12 bytes of general profile, tier and level, all zero, then sub_layer_profile_present_flag[0] = 1,
+    // sub_layer_level_present_flag[0] = 0 and seven reserved_zero_2bits.
+    data[12] = 0x80;
+    // The sub-layer's profile_space 0, tier_flag 0 and profile_idc, then zeros.
+    data[14] = sub_layer_profile_idc & 0x1f;
+
+    SrsFormat f;
+    SrsBuffer buf((char*)data, sizeof(data));
+    SrsBitBuffer bs(&buf);
+    return f.hevc_demux_rbsp_ptl(&bs, ptl, 1, 1);
+}
+
+// A sub-layer with profile 2 reads reserved_zero_7bits and reserved_zero_35bits, which must have room for it.
+VOID TEST(KernelCodecTest, HevcPtlSubLayerProfile2)
+{
+    srs_error_t err;
+
+    SrsHevcProfileTierLevel ptl;
+    HELPER_EXPECT_SUCCESS(mock_hevc_ptl_one_sub_layer(2, &ptl));
+    EXPECT_EQ(2, ptl.sub_layer_profile_idc[0]);
+    EXPECT_EQ(1, (int)ptl.sub_layer_reserved_zero_7bits.size());
+    EXPECT_EQ(1, (int)ptl.sub_layer_reserved_zero_35bits.size());
+}
+
+// A sub-layer with profile 5 reads reserved_zero_33bits, which must have room for it.
+VOID TEST(KernelCodecTest, HevcPtlSubLayerProfile5)
+{
+    srs_error_t err;
+
+    SrsHevcProfileTierLevel ptl;
+    HELPER_EXPECT_SUCCESS(mock_hevc_ptl_one_sub_layer(5, &ptl));
+    EXPECT_EQ(5, ptl.sub_layer_profile_idc[0]);
+    EXPECT_EQ(1, (int)ptl.sub_layer_reserved_zero_33bits.size());
+}
+
 // The HEVC equivalent of VideoFormatSpsInvalidLengthSizeMinusOneAfterValid: an accepted
 // hvcC establishes a valid length_size_minus_one, and a later malformed one must not
 // overwrite it, in vcodec->NAL_unit_length nor in the decoder configuration record.

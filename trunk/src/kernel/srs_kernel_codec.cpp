@@ -2035,7 +2035,10 @@ srs_error_t SrsFormat::hevc_demux_rbsp_ptl(SrsBitBuffer* bs, SrsHevcProfileTierL
     ptl->sub_layer_intra_constraint_flag.resize(max_sub_layers_minus1);
     ptl->sub_layer_one_picture_only_constraint_flag.resize(max_sub_layers_minus1);
     ptl->sub_layer_lower_bit_rate_constraint_flag.resize(max_sub_layers_minus1);
+    ptl->sub_layer_reserved_zero_7bits.resize(max_sub_layers_minus1);
+    ptl->sub_layer_reserved_zero_33bits.resize(max_sub_layers_minus1);
     ptl->sub_layer_reserved_zero_34bits.resize(max_sub_layers_minus1);
+    ptl->sub_layer_reserved_zero_35bits.resize(max_sub_layers_minus1);
     ptl->sub_layer_reserved_zero_43bits.resize(max_sub_layers_minus1);
     ptl->sub_layer_inbld_flag.resize(max_sub_layers_minus1);
     ptl->sub_layer_reserved_zero_bit.resize(max_sub_layers_minus1);
