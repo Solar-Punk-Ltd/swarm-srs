@@ -13,6 +13,7 @@
 #include <srs_app_srt_server.hpp>
 #include <srs_core_autofree.hpp>
 #include <srs_app_srt_conn.hpp>
+#include <srs_app_srt_source.hpp>
 #include <srs_app_statistic.hpp>
 #include <srs_app_st.hpp>
 #include <srs_app_conn.hpp>
@@ -899,6 +900,9 @@ VOID TEST(SrtTakeoverTest, RefusedPublisherNeverTakesOver)
     conn->req_->vhost = req->vhost;
     conn->req_->app = req->app;
     conn->req_->stream = req->stream;
+
+    // Make the stream busy, so a takeover placed before the hook would run here and fail the test.
+    conn->srt_source_->can_publish_ = false;
 
     HELPER_EXPECT_FAILED(conn->publishing());
     EXPECT_FALSE(old.expired);
