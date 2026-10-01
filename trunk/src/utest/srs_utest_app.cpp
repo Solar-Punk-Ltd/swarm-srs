@@ -513,6 +513,66 @@ VOID TEST(AppCoroutineTest, StartThread)
     srs_freep(err);
 }
 
+// A worker that ignores interrupts and finishes on its own after a while, like a coroutine that stops child
+// processes politely before it returns.
+class MockSlowWorker : public ISrsCoroutineHandler
+{
+public:
+    bool done;
+public:
+    MockSlowWorker() : done(false) {
+    }
+    virtual srs_error_t cycle() {
+        srs_utime_t starttime = srs_update_system_time();
+        while (srs_update_system_time() - starttime < 100 * SRS_UTIME_MILLISECONDS) {
+            srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+        }
+        done = true;
+        return srs_success;
+    }
+};
+
+// Stops another coroutine from a coroutine of its own, as a connection's teardown stops its workers.
+class MockCoroutineStopper : public ISrsCoroutineHandler
+{
+public:
+    SrsCoroutine* target;
+    bool done;
+public:
+    MockCoroutineStopper(SrsCoroutine* v) : target(v), done(false) {
+    }
+    virtual srs_error_t cycle() {
+        target->stop();
+        done = true;
+        return srs_success;
+    }
+};
+
+// A coroutine interrupted while it waits in stop() for another to finish, as when a connection is expired during
+// its own teardown, keeps waiting instead of aborting the server.
+VOID TEST(AppCoroutineTest, InterruptedStopKeepsWaiting)
+{
+    srs_error_t err;
+
+    MockSlowWorker worker;
+    SrsSTCoroutine wtrd("worker", &worker, _srs_context->get_id());
+    HELPER_ASSERT_SUCCESS(wtrd.start());
+
+    MockCoroutineStopper stopper(&wtrd);
+    SrsSTCoroutine strd("stopper", &stopper, _srs_context->get_id());
+    HELPER_ASSERT_SUCCESS(strd.start());
+
+    // The stopper now waits in st_thread_join for the worker.
+    srs_usleep(20 * SRS_UTIME_MILLISECONDS);
+    strd.interrupt();
+
+    for (int i = 0; i < 100 && !stopper.done; i++) {
+        srs_usleep(10 * SRS_UTIME_MILLISECONDS);
+    }
+    EXPECT_TRUE(stopper.done);
+    EXPECT_TRUE(worker.done);
+}
+
 VOID TEST(AppFragmentTest, CheckDuration)
 {
 	if (true) {
@@ -1270,6 +1330,37 @@ VOID TEST(AppEncoderTest, PublishDuringReloadStopGetsFreshEngines)
     EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
     EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
     e.on_unpublish();
+}
+
+// A publisher expired while its unpublish stops the engines, as a takeover does to a publisher that is already
+// leaving, still waits for the encoder loop to stop them instead of aborting the server.
+VOID TEST(AppEncoderTest, InterruptedStopStillWaitsForTheLoop)
+{
+    srs_error_t err;
+
+    MockEncoderConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(mock_encoder_config("unpublish_hold 0;")));
+    SrsUniquePtr<SrsRequest> req(mock_encoder_request());
+
+    SrsEncoder e;
+    HELPER_ASSERT_SUCCESS(e.on_publish(req.get()));
+    mock_encoder_wait_started(&e);
+    std::vector<int> pids = mock_encoder_pids(&e);
+    ASSERT_EQ(2, (int)pids.size());
+
+    MockEncoderStopper s(&e);
+    SrsSTCoroutine trd("stopper", &s, _srs_context->get_id());
+    HELPER_ASSERT_SUCCESS(trd.start());
+
+    // The stopper now waits in st_thread_join, because the engines ignore SIGTERM.
+    srs_usleep(100 * SRS_UTIME_MILLISECONDS);
+    trd.interrupt();
+
+    mock_encoder_wait_stopper(&s);
+    EXPECT_TRUE(s.done);
+    EXPECT_TRUE(e.ffmpegs.empty());
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[0]));
+    EXPECT_FALSE(mock_encoder_pid_alive(pids[1]));
 }
 
 // A publisher leaving while a reload stops the engines does not start a hold over engines that are going away, so
