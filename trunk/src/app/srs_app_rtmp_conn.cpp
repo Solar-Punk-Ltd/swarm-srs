@@ -1095,6 +1095,13 @@ srs_error_t SrsRtmpConn::acquire_publish(SrsSharedPtr<SrsLiveSource> source)
         srs_freep(err);
     }
 
+    // The old publisher's source dies when it goes, and the source manager may drop it from its pool while this one
+    // waits, such as through a slow on_unpublish hook. Publishing on it then would reach no player, so refuse as busy:
+    // the encoder reconnects and fetches the source the pool now has.
+    if (_srs_sources->fetch(req).get() != source.get()) {
+        return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "rtmp: source of %s was dropped while taking over", req->get_stream_url().c_str());
+    }
+
     return do_acquire_publish(source);
 }
 

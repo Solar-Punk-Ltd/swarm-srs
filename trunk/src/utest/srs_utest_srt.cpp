@@ -1150,3 +1150,58 @@ VOID TEST(SrtTakeoverTest, TakesOverAnRtmpPublisher)
     _srs_context->set_id(cid);
 }
 
+// An old SRT publisher that frees its SRT source when told to go and then spends long enough in its on_unpublish hook
+// for the source manager to drop the dead source, before it leaves the statistics.
+class MockTakeoverDroppedSrtHolder : public MockTakeoverPublisher
+{
+public:
+    SrsSharedPtr<SrsSrtSource> srt;
+public:
+    MockTakeoverDroppedSrtHolder(std::string v, SrsSharedPtr<SrsSrtSource> s) : MockTakeoverPublisher(v, false), srt(s) {
+    }
+    virtual srs_error_t cycle() {
+        srt->can_publish_ = true;
+        SrsStatistic::instance()->on_stream_close(srt->req);
+        // Died long enough ago that the source manager's next tick, which may come during the hook, drops it.
+        srt->stream_die_at_ = srs_get_system_time() - 10 * SRS_UTIME_SECONDS;
+        srs_error_t err = _srs_srt_sources->notify(0, 0, 0);
+        srs_freep(err);
+        srs_usleep(30 * SRS_UTIME_MILLISECONDS);
+        SrsStatistic::instance()->on_disconnect(id, srs_success);
+        return srs_success;
+    }
+};
+
+// An SRT newcomer fetched its SRT source when it connected. If the source manager dropped that source during the wait,
+// the newcomer is refused as busy rather than publish where no SRT player can find it.
+VOID TEST(SrtTakeoverTest, RefusesWhenTheSourceWasDroppedDuringTheWait)
+{
+    srs_error_t err;
+
+    MockTakeoverConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { srt { enabled on; takeover on; srt_to_rtmp off; } }"));
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("srt-takeover-dropped"));
+    MockSrtReleaseServer server(req->get_stream_url());
+
+    SrsContextId cid = _srs_context->get_id();
+    SrsMpegtsSrtConn* conn = mock_srt_release_conn(req.get());
+    conn->srt_source_->can_publish_ = false;
+
+    MockTakeoverDroppedSrtHolder holder("srt-takeover-dropped-holder", conn->srt_source_);
+    mock_takeover_publish(&holder, req.get());
+
+    err = conn->acquire_publish();
+    bool accepted = (err == srs_success);
+    EXPECT_EQ(ERROR_SRT_SOURCE_BUSY, srs_error_code(err)) << srs_error_desc(err);
+    srs_freep(err);
+    EXPECT_TRUE(holder.expired);
+    EXPECT_TRUE(_srs_srt_sources->fetch(req.get()).get() == NULL);
+    // Refused, so it never published on the dropped source.
+    EXPECT_TRUE(conn->srt_source_->can_publish());
+
+    if (accepted) {
+        conn->release_publish();
+    }
+    srs_freep(conn);
+    _srs_context->set_id(cid);
+}

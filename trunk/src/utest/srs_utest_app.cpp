@@ -2003,6 +2003,63 @@ VOID TEST(RtmpTakeoverTest, TakesOverAnRtmpPublisherOnceItHasLeft)
     _srs_context->set_id(cid);
 }
 
+// An old RTMP publisher that frees its source when told to go and then spends long enough in its on_unpublish hook for
+// the source manager to drop the dead source, before it leaves the statistics.
+class MockTakeoverDroppedHolder : public MockTakeoverPublisher
+{
+public:
+    SrsSharedPtr<SrsLiveSource> source;
+public:
+    MockTakeoverDroppedHolder(std::string v, SrsSharedPtr<SrsLiveSource> s) : MockTakeoverPublisher(v, false), source(s) {
+    }
+    virtual srs_error_t cycle() {
+        source->can_publish_ = true;
+        SrsStatistic::instance()->on_stream_close(source->req);
+        // Died long enough ago that the source manager's next tick, which may come during the hook, drops it.
+        source->stream_die_at_ = srs_get_system_time() - 200 * SRS_UTIME_SECONDS;
+        srs_error_t err = _srs_sources->notify(0, 0, 0);
+        srs_freep(err);
+        srs_usleep(30 * SRS_UTIME_MILLISECONDS);
+        SrsStatistic::instance()->on_disconnect(id, srs_success);
+        return srs_success;
+    }
+};
+
+// A newcomer fetched its source before it waited. If the source manager dropped that source during the wait, the
+// newcomer is refused as busy rather than publish where no player can find it, and it reconnects to the pool's source.
+VOID TEST(RtmpTakeoverTest, RefusesWhenTheSourceWasDroppedDuringTheWait)
+{
+    srs_error_t err;
+
+    MockTakeoverConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { publish { takeover on; } }"));
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("rtmp-takeover-dropped"));
+    MockTakeoverServer server(req->get_stream_url());
+    SrsSharedPtr<SrsLiveSource> source;
+    HELPER_ASSERT_SUCCESS(_srs_sources->fetch_or_create(req.get(), server.server(), source));
+    source->can_publish_ = false;
+
+    MockTakeoverDroppedHolder holder("rtmp-takeover-dropped-holder", source);
+    mock_takeover_publish(&holder, req.get(), SrsRtmpConnFMLEPublish);
+
+    SrsContextId cid = _srs_context->get_id();
+    SrsRtmpConn* conn = mock_takeover_rtmp_conn(server.server(), req.get());
+    err = conn->acquire_publish(source);
+    bool accepted = (err == srs_success);
+    EXPECT_EQ(ERROR_SYSTEM_STREAM_BUSY, srs_error_code(err)) << srs_error_desc(err);
+    srs_freep(err);
+    EXPECT_TRUE(holder.expired);
+    EXPECT_TRUE(_srs_sources->fetch(req.get()).get() == NULL);
+    // Refused, so it never published on the dropped source.
+    EXPECT_TRUE(source->can_publish(false));
+
+    if (accepted) {
+        conn->release_publish(source);
+    }
+    srs_freep(conn);
+    _srs_context->set_id(cid);
+}
+
 extern SrsStageManager* _srs_stages;
 
 // An RTMP publisher's periodic statistics line ends with the vhost its request resolved to: a configured vhost by its

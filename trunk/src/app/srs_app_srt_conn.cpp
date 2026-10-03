@@ -395,6 +395,13 @@ srs_error_t SrsMpegtsSrtConn::acquire_publish()
                 srs_warn("srt: no takeover, %s", srs_error_desc(err).c_str());
                 srs_freep(err);
             }
+
+            // The source manager may drop the old publisher's SRT source while this one waits, such as through a
+            // slow on_unpublish hook, and this connection fetched its source before the wait. Publishing on it then
+            // would reach no SRT player, so refuse as busy: the encoder reconnects and fetches the pool's source.
+            if (_srs_srt_sources->fetch(req_).get() != srt_source_.get()) {
+                return srs_error_new(ERROR_SRT_SOURCE_BUSY, "srt: source of %s was dropped while taking over", req_->get_stream_url().c_str());
+            }
         }
     }
 
