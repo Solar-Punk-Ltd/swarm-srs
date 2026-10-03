@@ -1049,10 +1049,11 @@ srs_error_t SrsRtmpConn::do_publishing(SrsSharedPtr<SrsLiveSource> source, SrsPu
             kbps->sample();
             bool mr = _srs_config->get_mr_enabled(req->vhost);
             srs_utime_t mr_sleep = _srs_config->get_mr_sleep(req->vhost);
-            srs_trace("<- " SRS_CONSTS_LOG_CLIENT_PUBLISH " time=%d, okbps=%d,%d,%d, ikbps=%d,%d,%d, mr=%d/%d, p1stpt=%d, pnt=%d",
+            // The vhost comes last, so a reader of the fields before it keeps working.
+            srs_trace("<- " SRS_CONSTS_LOG_CLIENT_PUBLISH " time=%d, okbps=%d,%d,%d, ikbps=%d,%d,%d, mr=%d/%d, p1stpt=%d, pnt=%d, vhost=%s",
                 (int)pprint->age(), kbps->get_send_kbps(), kbps->get_send_kbps_30s(), kbps->get_send_kbps_5m(),
                 kbps->get_recv_kbps(), kbps->get_recv_kbps_30s(), kbps->get_recv_kbps_5m(), mr, srsu2msi(mr_sleep),
-                srsu2msi(publish_1stpkt_timeout), srsu2msi(publish_normal_timeout));
+                srsu2msi(publish_1stpkt_timeout), srsu2msi(publish_normal_timeout), req->vhost.c_str());
 
 #ifdef SRS_APM
             // TODO: Do not use pithy print for frame span.

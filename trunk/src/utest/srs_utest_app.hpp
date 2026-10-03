@@ -137,13 +137,17 @@ public:
 private:
     SrsTcpConnection* client_io_;
     SrsRtmpClient* client_;
+    int stream_id_;
 public:
     MockTakeoverRtmpPublisher();
     virtual ~MockTakeoverRtmpPublisher();
 public:
     // Publishes req's stream, whose live source server handles, and returns once the statistics record this
-    // connection as the stream's publisher.
+    // connection as the stream's publisher. A vhost other than the default one is named in the stream's query, as a
+    // transcode republish names its vhost.
     srs_error_t publish(SrsServer* server, SrsRequest* req);
+    // Sends an onMetaData message, which counts as the publisher's traffic.
+    srs_error_t send_metadata();
     // Whether the connection has left the statistics, which is what a takeover waits for.
     bool gone();
 // Interface ISrsResourceManager

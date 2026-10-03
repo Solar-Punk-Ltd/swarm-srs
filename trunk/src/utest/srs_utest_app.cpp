@@ -25,6 +25,7 @@ using namespace std;
 #include <srs_kernel_utility.hpp>
 #include <srs_app_rtmp_conn.hpp>
 #include <srs_app_edge.hpp>
+#include <srs_app_pithy_print.hpp>
 #include <srs_utest_config.hpp>
 
 #include <arpa/inet.h>
@@ -1560,6 +1561,7 @@ MockTakeoverRtmpPublisher::MockTakeoverRtmpPublisher()
     ended = false;
     client_io_ = NULL;
     client_ = NULL;
+    stream_id_ = 0;
 }
 
 MockTakeoverRtmpPublisher::~MockTakeoverRtmpPublisher()
@@ -1611,8 +1613,11 @@ srs_error_t MockTakeoverRtmpPublisher::publish(SrsServer* server, SrsRequest* re
     if ((err = client_->connect_app(req->app, "rtmp://127.0.0.1/" + req->app, NULL, false, NULL)) != srs_success) {
         return srs_error_wrap(err, "connect app");
     }
-    int stream_id = 0;
-    if ((err = client_->fmle_publish(req->stream, stream_id)) != srs_success) {
+    std::string stream = req->stream;
+    if (req->vhost != SRS_CONSTS_RTMP_DEFAULT_VHOST) {
+        stream += "?vhost=" + req->vhost;
+    }
+    if ((err = client_->fmle_publish(stream, stream_id_)) != srs_success) {
         return srs_error_wrap(err, "publish");
     }
 
@@ -1625,6 +1630,11 @@ srs_error_t MockTakeoverRtmpPublisher::publish(SrsServer* server, SrsRequest* re
         srs_usleep(10 * SRS_UTIME_MILLISECONDS);
     }
     return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "%s never published %s", id.c_str(), req->get_stream_url().c_str());
+}
+
+srs_error_t MockTakeoverRtmpPublisher::send_metadata()
+{
+    return client_->send_and_free_packet(new SrsOnMetaDataPacket(), stream_id_);
 }
 
 bool MockTakeoverRtmpPublisher::gone()
@@ -1991,4 +2001,52 @@ VOID TEST(RtmpTakeoverTest, TakesOverAnRtmpPublisherOnceItHasLeft)
     }
     srs_freep(conn);
     _srs_context->set_id(cid);
+}
+
+extern SrsStageManager* _srs_stages;
+
+// An RTMP publisher's periodic statistics line ends with the vhost its request resolved to: a configured vhost by its
+// own name, as a transcode republish names one, and a host that no vhost names as the default vhost. So a log reader can
+// tell a broadcaster from a republish onto another vhost without the lines that carry the stream key.
+VOID TEST(RtmpPublishTest, PeriodicLineEndsWithItsVhost)
+{
+    srs_error_t err;
+
+    // Every turn of the publish loop prints, instead of once in pithy_print_ms.
+    SrsUniquePtr<SrsPithyPrint> pprint(SrsPithyPrint::create_rtmp_publish());
+    SrsStageInfo* stage = _srs_stages->fetch_or_create(pprint->stage_id);
+    srs_utime_t interval = stage->interval;
+    stage->interval = 1 * SRS_UTIME_MILLISECONDS;
+
+    const char* vhosts[] = {SRS_CONSTS_RTMP_DEFAULT_VHOST, "abr"};
+    for (int i = 0; i < 2; i++) {
+        MockTakeoverConfig mc;
+        HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF
+            "vhost __defaultVhost__ { publish { firstpkt_timeout 200; normal_timeout 200; } } "
+            "vhost abr { publish { firstpkt_timeout 200; normal_timeout 200; } }"));
+        SrsUniquePtr<SrsRequest> req(mock_takeover_request(std::string("rtmp-stats-") + (i ? "rung" : "ingest")));
+        req->vhost = vhosts[i];
+        MockTakeoverServer server(req->get_stream_url());
+
+        MockTakeoverLog log;
+        MockTakeoverRtmpPublisher publisher;
+        HELPER_ASSERT_SUCCESS(publisher.publish(server.server(), req.get()));
+
+        // The loop needs traffic on every turn, or it ends the publish as timed out before a turn that prints. It
+        // also measures the time between prints on the clock that a running server's timers refresh.
+        int line = -1;
+        for (int j = 0; j < 60 && line < 0; j++) {
+            HELPER_EXPECT_SUCCESS(publisher.send_metadata());
+            srs_usleep(50 * SRS_UTIME_MILLISECONDS);
+            srs_update_system_time();
+            line = log.find("[" + publisher.id + "] <- " SRS_CONSTS_LOG_CLIENT_PUBLISH " time=");
+        }
+        EXPECT_LE(0, line) << vhosts[i];
+        if (line >= 0) {
+            EXPECT_TRUE(srs_string_ends_with(log.lines[line], std::string(", pnt=200, vhost=") + vhosts[i]))
+                << log.lines[line];
+        }
+    }
+
+    stage->interval = interval;
 }
