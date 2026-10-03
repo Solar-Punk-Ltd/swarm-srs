@@ -151,6 +151,26 @@ public:
     virtual void remove(ISrsResource* c);
 };
 
+// An HTTP hook server on a free loopback port that answers every hook with 0 after a short delay, as a real one takes a
+// moment, so a test can see what happens while a hook is in flight.
+class MockTakeoverHookServer : public ISrsCoroutineHandler
+{
+public:
+    int port;
+private:
+    srs_netfd_t lfd_;
+    SrsCoroutine* trd_;
+public:
+    MockTakeoverHookServer();
+    virtual ~MockTakeoverHookServer();
+public:
+    // Listens, and sets port.
+    srs_error_t start();
+    virtual srs_error_t cycle();
+private:
+    void answer(srs_netfd_t fd);
+};
+
 // Keeps what is logged while it is installed: the warnings, and every line of every level in order, each led by the
 // id of the context that logged it.
 class MockTakeoverLog : public ISrsLog

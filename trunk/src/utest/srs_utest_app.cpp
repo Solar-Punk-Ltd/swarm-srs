@@ -27,6 +27,8 @@ using namespace std;
 #include <srs_app_edge.hpp>
 #include <srs_utest_config.hpp>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
 #include <sys/socket.h>
@@ -1635,6 +1637,86 @@ void MockTakeoverRtmpPublisher::remove(ISrsResource* /*c*/)
     ended = true;
 }
 
+MockTakeoverHookServer::MockTakeoverHookServer()
+{
+    port = 0;
+    lfd_ = NULL;
+    trd_ = NULL;
+}
+
+MockTakeoverHookServer::~MockTakeoverHookServer()
+{
+    srs_freep(trd_);
+    srs_close_stfd(lfd_);
+}
+
+srs_error_t MockTakeoverHookServer::start()
+{
+    srs_error_t err = srs_success;
+
+    if ((err = srs_tcp_listen("127.0.0.1", 0, &lfd_)) != srs_success) {
+        return srs_error_wrap(err, "listen");
+    }
+
+    sockaddr_in addr;
+    socklen_t addrlen = sizeof(addr);
+    if (getsockname(srs_netfd_fileno(lfd_), (sockaddr*)&addr, &addrlen) != 0) {
+        return srs_error_new(ERROR_SOCKET_BIND, "getsockname");
+    }
+    port = ntohs(addr.sin_port);
+
+    trd_ = new SrsSTCoroutine("hooks", this, _srs_context->get_id());
+    return trd_->start();
+}
+
+srs_error_t MockTakeoverHookServer::cycle()
+{
+    srs_error_t err = srs_success;
+
+    while ((err = trd_->pull()) == srs_success) {
+        srs_netfd_t fd = srs_accept(lfd_, NULL, NULL, SRS_UTIME_NO_TIMEOUT);
+        if (fd) {
+            answer(fd);
+            srs_close_stfd(fd);
+        }
+    }
+
+    return err;
+}
+
+void MockTakeoverHookServer::answer(srs_netfd_t fd)
+{
+    SrsStSocket skt(fd);
+    skt.set_recv_timeout(3 * SRS_UTIME_SECONDS);
+    skt.set_send_timeout(3 * SRS_UTIME_SECONDS);
+
+    // Reads the whole request, the headers and then the body their Content-Length announces, because closing with
+    // anything unread would reset the connection before the answer is read.
+    std::string request;
+    size_t body_at = std::string::npos;
+    size_t body_size = 0;
+    while (body_at == std::string::npos || request.size() < body_at + body_size) {
+        char buf[4096];
+        ssize_t nread = 0;
+        srs_error_t err = skt.read(buf, sizeof(buf), &nread);
+        if (err != srs_success) {
+            srs_freep(err);
+            return;
+        }
+        request.append(buf, nread);
+        if (body_at == std::string::npos && (body_at = request.find("\r\n\r\n")) != std::string::npos) {
+            body_at += 4;
+            size_t header = request.find("Content-Length: ");
+            body_size = (header == std::string::npos) ? 0 : (size_t)::atoi(request.c_str() + header + 16);
+        }
+    }
+
+    srs_usleep(50 * SRS_UTIME_MILLISECONDS);
+    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\n\r\n0";
+    srs_error_t err = skt.write((void*)response.data(), response.length(), NULL);
+    srs_freep(err);
+}
+
 // The take-over line names the protocol of the new publisher, so a log tells an RTMP takeover from an SRT one.
 VOID TEST(TakeoverTest, TakeOverLineNamesTheNewPublishersProtocol)
 {
@@ -1872,10 +1954,12 @@ VOID TEST(RtmpTakeoverTest, TakesOverAnRtmpPublisherOnceItHasLeft)
 {
     srs_error_t err;
 
+    // The hook server answers late, so a takeover that went ahead before the on_unpublish was answered would show.
+    MockTakeoverHookServer hooks;
+    HELPER_ASSERT_SUCCESS(hooks.start());
     MockTakeoverConfig mc;
-    // Nothing listens on port 1, so an on_unpublish fails, and logs a warning that names its client.
-    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { publish { takeover on; } "
-        "http_hooks { enabled on; on_unpublish http://127.0.0.1:1/unpublish; } }"));
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(std::string(_MIN_OK_CONF) + "vhost __defaultVhost__ { publish { takeover on; } "
+        "http_hooks { enabled on; on_unpublish http://127.0.0.1:" + srs_int2str(hooks.port) + "/unpublish; } }"));
     SrsUniquePtr<SrsRequest> req(mock_takeover_request("rtmp-takeover-real"));
     MockTakeoverServer server(req->get_stream_url());
 
@@ -1894,7 +1978,7 @@ VOID TEST(RtmpTakeoverTest, TakesOverAnRtmpPublisherOnceItHasLeft)
     srs_freep(err);
 
     EXPECT_LE(0, log.find("rtmp: take over /live/rtmp-takeover-real from publisher " + old.id));
-    int unpublished = log.find("ignore on_unpublish failed, client_id=" + old.id);
+    int unpublished = log.find("on_unpublish ok, client_id=" + old.id);
     EXPECT_LE(0, unpublished);
     EXPECT_TRUE(old.gone());
     // The connection logs how it ended right after it leaves the statistics.

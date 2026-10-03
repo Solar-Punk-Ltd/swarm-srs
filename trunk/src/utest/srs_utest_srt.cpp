@@ -1115,10 +1115,12 @@ VOID TEST(SrtTakeoverTest, TakesOverAnRtmpPublisher)
 {
     srs_error_t err;
 
+    // The hook server answers late, so a takeover that went ahead before the on_unpublish was answered would show.
+    MockTakeoverHookServer hooks;
+    HELPER_ASSERT_SUCCESS(hooks.start());
     MockTakeoverConfig mc;
-    // Nothing listens on port 1, so an on_unpublish fails, and logs a warning that names its client.
-    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { srt { enabled on; takeover on; } "
-        "http_hooks { enabled on; on_unpublish http://127.0.0.1:1/unpublish; } }"));
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(std::string(_MIN_OK_CONF) + "vhost __defaultVhost__ { srt { enabled on; takeover on; } "
+        "http_hooks { enabled on; on_unpublish http://127.0.0.1:" + srs_int2str(hooks.port) + "/unpublish; } }"));
     SrsUniquePtr<SrsRequest> req(mock_takeover_request("srt-over-rtmp"));
     MockSrtReleaseServer server(req->get_stream_url());
 
@@ -1134,7 +1136,7 @@ VOID TEST(SrtTakeoverTest, TakesOverAnRtmpPublisher)
     srs_freep(err);
 
     EXPECT_LE(0, log.find("srt: take over /live/srt-over-rtmp from publisher " + old.id));
-    int unpublished = log.find("ignore on_unpublish failed, client_id=" + old.id);
+    int unpublished = log.find("on_unpublish ok, client_id=" + old.id);
     EXPECT_LE(0, unpublished);
     EXPECT_TRUE(old.gone());
     // The connection logs how it ended right after it leaves the statistics.
