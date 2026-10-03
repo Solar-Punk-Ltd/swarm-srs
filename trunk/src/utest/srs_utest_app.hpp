@@ -18,10 +18,17 @@
 #include <vector>
 
 #include <srs_kernel_log.hpp>
+#include <srs_protocol_conn.hpp>
+#include <srs_protocol_rtmp_stack.hpp>
 #include <srs_app_conn.hpp>
 #include <srs_app_st.hpp>
 #include <srs_app_statistic.hpp>
+#include <srs_app_hybrid.hpp>
+#include <srs_app_server.hpp>
+#include <srs_app_source.hpp>
 #include <srs_utest_config.hpp>
+
+class SrsRtmpConn;
 
 // The helpers below serve the takeover tests of every protocol, so they live where every build compiles them.
 
@@ -86,7 +93,63 @@ public:
 };
 
 extern SrsRequest* mock_takeover_request(std::string stream);
-extern void mock_takeover_publish(MockTakeoverPublisher* old, SrsRequest* req);
+// Records old in the statistics as the publisher of req's stream, as a connection of the given type does.
+extern void mock_takeover_publish(MockTakeoverPublisher* old, SrsRequest* req, SrsRtmpConnType type = SrsSrtConnPublish);
+
+// Gives the connections under test the server that handles their live source's publishes, and takes the stream's
+// live source out of the global pool when done.
+class MockTakeoverServer
+{
+public:
+    SrsHybridServer hybrid;
+    std::string url;
+private:
+    SrsHybridServer* saved_;
+public:
+    MockTakeoverServer(std::string u) : url(u) {
+        hybrid.register_server(new SrsServerAdapter());
+        saved_ = _srs_hybrid;
+        _srs_hybrid = &hybrid;
+    }
+    virtual ~MockTakeoverServer() {
+        _srs_hybrid = saved_;
+        _srs_sources->pool.erase(url);
+    }
+    SrsServer* server() {
+        return hybrid.srs()->instance();
+    }
+};
+
+// An RTMP connection to publish req's stream, with no socket, as acquire_publish and publishing see one. Its
+// constructor gives the caller's coroutine a fresh context id, which the caller restores when it is done.
+extern SrsRtmpConn* mock_takeover_rtmp_conn(SrsServer* server, SrsRequest* req);
+
+// A real RTMP publisher: an SrsRtmpConn serving one end of a socket pair while an RTMP client publishes on the other,
+// so the connection runs its whole cycle, from the handshake to leaving the statistics. The connection reports its
+// end here rather than to a server, and this object frees it.
+class MockTakeoverRtmpPublisher : public ISrsResourceManager
+{
+public:
+    SrsRtmpConn* conn;
+    std::string id;
+    // Whether the connection's cycle has reported its end, its last step.
+    bool ended;
+private:
+    SrsTcpConnection* client_io_;
+    SrsRtmpClient* client_;
+public:
+    MockTakeoverRtmpPublisher();
+    virtual ~MockTakeoverRtmpPublisher();
+public:
+    // Publishes req's stream, whose live source server handles, and returns once the statistics record this
+    // connection as the stream's publisher.
+    srs_error_t publish(SrsServer* server, SrsRequest* req);
+    // Whether the connection has left the statistics, which is what a takeover waits for.
+    bool gone();
+// Interface ISrsResourceManager
+public:
+    virtual void remove(ISrsResource* c);
+};
 
 // Keeps what is logged while it is installed: the warnings, and every line of every level in order, each led by the
 // id of the context that logged it.

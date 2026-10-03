@@ -1069,8 +1069,38 @@ srs_error_t SrsRtmpConn::do_publishing(SrsSharedPtr<SrsLiveSource> source, SrsPu
 
 srs_error_t SrsRtmpConn::acquire_publish(SrsSharedPtr<SrsLiveSource> source)
 {
+    srs_error_t err = do_acquire_publish(source);
+    if (srs_error_code(err) != ERROR_SYSTEM_STREAM_BUSY) {
+        return err;
+    }
+
+    // publishing() has already run the on_publish hook, after stream_service_cycle() ran the security check, so only
+    // a publisher they let through gets here. With the takeover on, it may replace a publisher the stream still has,
+    // such as an encoder whose network died without closing, and then try again. If the old one does not go in time,
+    // the second try refuses this one as busy, though the old one has already been told to go. An edge forwards its
+    // publishers to its origin, whose own setting decides.
+    SrsRequest* req = info->req;
+    if (info->edge || !_srs_config->get_publish_takeover(req->vhost)) {
+        return err;
+    }
+    srs_freep(err);
+
+    if ((err = srs_takeover_publisher(req, "rtmp", SRS_TAKEOVER_TIMEOUT)) != srs_success) {
+        // This connection was interrupted while it waited, so it is going and must not publish.
+        if (srs_error_code(err) == ERROR_THREAD_INTERRUPED) {
+            return srs_error_wrap(err, "rtmp: takeover");
+        }
+        srs_warn("rtmp: no takeover, %s", srs_error_desc(err).c_str());
+        srs_freep(err);
+    }
+
+    return do_acquire_publish(source);
+}
+
+srs_error_t SrsRtmpConn::do_acquire_publish(SrsSharedPtr<SrsLiveSource> source)
+{
     srs_error_t err = srs_success;
-    
+
     SrsRequest* req = info->req;
 
     // Check whether RTMP stream is busy.

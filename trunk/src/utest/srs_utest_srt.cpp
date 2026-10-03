@@ -13,6 +13,7 @@
 #include <srs_app_srt_server.hpp>
 #include <srs_core_autofree.hpp>
 #include <srs_app_srt_conn.hpp>
+#include <srs_app_rtmp_conn.hpp>
 #include <srs_app_srt_source.hpp>
 #include <srs_app_source.hpp>
 #include <srs_app_server.hpp>
@@ -1039,5 +1040,111 @@ VOID TEST(SrtPublishReleaseTest, RefusalNeverReleasesTheHolder)
         srs_freep(conn);
         _srs_context->set_id(cid);
     }
+}
+
+// An old SRT publisher that releases its sources when it goes, as a real one does before it leaves the statistics.
+class MockTakeoverSrtHolder : public MockTakeoverPublisher
+{
+public:
+    SrsSharedPtr<SrsSrtSource> srt;
+    SrsSharedPtr<SrsLiveSource> live;
+public:
+    MockTakeoverSrtHolder(std::string v, SrsSharedPtr<SrsSrtSource> s, SrsSharedPtr<SrsLiveSource> l)
+        : MockTakeoverPublisher(v, false), srt(s), live(l) {
+    }
+    virtual srs_error_t cycle() {
+        srs_usleep(30 * SRS_UTIME_MILLISECONDS);
+        srt->can_publish_ = true;
+        if (live.get()) {
+            live->can_publish_ = true;
+        }
+        SrsStatistic::instance()->on_disconnect(id, srs_success);
+        return srs_success;
+    }
+};
+
+// An RTMP publisher takes a stream over from an SRT one. Bridged to RTMP, the SRT publisher holds the live source as
+// well as its SRT source. Not bridged, it holds only its SRT source, which the RTMP publisher must take over too.
+VOID TEST(RtmpTakeoverTest, TakesOverAnSrtPublisher)
+{
+    srs_error_t err;
+
+    for (int bridged = 0; bridged <= 1; bridged++) {
+        MockTakeoverConfig mc;
+        HELPER_ASSERT_SUCCESS(mc.conf.parse(std::string(_MIN_OK_CONF) + "srt_server { enabled on; } "
+            "vhost __defaultVhost__ { publish { takeover on; } srt { enabled on; srt_to_rtmp "
+            + (bridged ? "on" : "off") + "; } }"));
+        std::string name = bridged ? "rtmp-over-srt-bridged" : "rtmp-over-srt";
+        SrsUniquePtr<SrsRequest> req(mock_takeover_request(name));
+        MockSrtReleaseServer server(req->get_stream_url());
+        SrsServer* srs = server.hybrid.srs()->instance();
+
+        SrsSharedPtr<SrsSrtSource> srt;
+        HELPER_ASSERT_SUCCESS(_srs_srt_sources->fetch_or_create(req.get(), srt));
+        srt->can_publish_ = false;
+        SrsSharedPtr<SrsLiveSource> live;
+        HELPER_ASSERT_SUCCESS(_srs_sources->fetch_or_create(req.get(), srs, live));
+        live->can_publish_ = !bridged;
+
+        MockTakeoverSrtHolder holder(name + "-holder", srt, bridged ? live : SrsSharedPtr<SrsLiveSource>());
+        mock_takeover_publish(&holder, req.get());
+
+        SrsContextId cid = _srs_context->get_id();
+        SrsRtmpConn* conn = mock_takeover_rtmp_conn(srs, req.get());
+        err = conn->acquire_publish(live);
+        bool accepted = (err == srs_success);
+        EXPECT_TRUE(accepted) << name << " " << srs_error_desc(err);
+        srs_freep(err);
+        EXPECT_TRUE(holder.expired) << name;
+        EXPECT_FALSE(live->can_publish(false)) << name;
+
+        // Only a publisher that was accepted releases the stream, never one that would release the holder's.
+        if (accepted) {
+            conn->release_publish(live);
+        }
+        srt->can_publish_ = true;
+        live->can_publish_ = true;
+        srs_freep(conn);
+        _srs_context->set_id(cid);
+    }
+}
+
+// An SRT publisher takes a stream over from a real RTMP one, which releases its source and sends its on_unpublish, and
+// only then leaves the statistics.
+VOID TEST(SrtTakeoverTest, TakesOverAnRtmpPublisher)
+{
+    srs_error_t err;
+
+    MockTakeoverConfig mc;
+    // Nothing listens on port 1, so an on_unpublish fails, and logs a warning that names its client.
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { srt { enabled on; takeover on; } "
+        "http_hooks { enabled on; on_unpublish http://127.0.0.1:1/unpublish; } }"));
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("srt-over-rtmp"));
+    MockSrtReleaseServer server(req->get_stream_url());
+
+    MockTakeoverLog log;
+    MockTakeoverRtmpPublisher old;
+    HELPER_ASSERT_SUCCESS(old.publish(server.hybrid.srs()->instance(), req.get()));
+
+    SrsContextId cid = _srs_context->get_id();
+    SrsMpegtsSrtConn* conn = mock_srt_release_conn(req.get());
+    err = conn->acquire_publish();
+    bool accepted = (err == srs_success);
+    EXPECT_TRUE(accepted) << srs_error_desc(err);
+    srs_freep(err);
+
+    EXPECT_LE(0, log.find("srt: take over /live/srt-over-rtmp from publisher " + old.id));
+    int unpublished = log.find("ignore on_unpublish failed, client_id=" + old.id);
+    EXPECT_LE(0, unpublished);
+    EXPECT_TRUE(old.gone());
+    // The connection logs how it ended right after it leaves the statistics.
+    EXPECT_LT(unpublished, log.find("[" + old.id + "] serve error"));
+    EXPECT_FALSE(conn->srt_source_->can_publish());
+
+    if (accepted) {
+        conn->release_publish();
+    }
+    srs_freep(conn);
+    _srs_context->set_id(cid);
 }
 
