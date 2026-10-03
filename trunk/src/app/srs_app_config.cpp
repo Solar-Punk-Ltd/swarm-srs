@@ -2860,16 +2860,22 @@ srs_error_t SrsConfig::check_normal_config()
     }
     
     ////////////////////////////////////////////////////////////////////////
-    // check the srt takeover is guarded by an on_publish hook
+    // check the srt and publish takeovers are guarded by an on_publish hook
     ////////////////////////////////////////////////////////////////////////
     for (int i = 0; i < (int)vhosts.size(); i++) {
         std::string vhost = vhosts[i]->arg0();
-        if (!get_srt_enabled(vhost) || !get_srt_takeover(vhost)) {
+        bool srt_takeover = get_srt_enabled(vhost) && get_srt_takeover(vhost);
+        bool publish_takeover = get_publish_takeover(vhost);
+        SrsConfDirective* on_publish = get_vhost_on_publish(vhost);
+        if (get_vhost_http_hooks_enabled(vhost) && on_publish && !on_publish->args.empty()) {
             continue;
         }
-        SrsConfDirective* on_publish = get_vhost_on_publish(vhost);
-        if (!get_vhost_http_hooks_enabled(vhost) || !on_publish || on_publish->args.empty()) {
+        if (srt_takeover) {
             srs_warn("srt takeover of %s is on without an on_publish hook, so any publisher the security rules allow can take over a live stream",
+                vhost.c_str());
+        }
+        if (publish_takeover) {
+            srs_warn("publish takeover of %s is on without an on_publish hook, so any publisher the security rules allow can take over a live stream",
                 vhost.c_str());
         }
     }

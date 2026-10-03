@@ -1556,3 +1556,52 @@ VOID TEST(RtmpTakeoverTest, ConfigDefaultOffAndOn)
         EXPECT_TRUE(conf.get_publish_takeover("v"));
     }
 }
+
+// Turning the takeover on without an on_publish hook is allowed, but warned about, because then any publisher the
+// security rules allow can take a live stream over.
+VOID TEST(RtmpTakeoverTest, WarnsWhenOnWithoutAPublishHook)
+{
+    srs_error_t err;
+
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost nohooks { publish { takeover on; } }"));
+        EXPECT_EQ(1, log.count("publish takeover of nohooks"));
+    }
+
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost hooksoff { publish { takeover on; } "
+            "http_hooks { enabled off; on_publish http://127.0.0.1:8085/api/v1/streams; } }"));
+        EXPECT_EQ(1, log.count("publish takeover of hooksoff"));
+    }
+
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost nourl { publish { takeover on; } "
+            "http_hooks { enabled on; on_publish; } }"));
+        EXPECT_EQ(1, log.count("publish takeover of nourl"));
+    }
+
+    // A vhost with both takeovers on and no hook is warned about once for each.
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost both { publish { takeover on; } "
+            "srt { enabled on; takeover on; } }"));
+        EXPECT_EQ(1, log.count("publish takeover of both"));
+        EXPECT_EQ(1, log.count("srt takeover of both"));
+    }
+
+    if (true) {
+        MockTakeoverWarnLog log;
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost hooked { publish { takeover on; } "
+            "http_hooks { enabled on; on_publish http://127.0.0.1:8085/api/v1/streams; } } "
+            "vhost off { publish { normal_timeout 7000; } }"));
+        EXPECT_EQ(0, log.count("takeover of"));
+    }
+}
