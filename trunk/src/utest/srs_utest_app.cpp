@@ -2050,3 +2050,65 @@ VOID TEST(RtmpPublishTest, PeriodicLineEndsWithItsVhost)
 
     stage->interval = interval;
 }
+
+// A bridge whose publish fails, so a publish can fail after the live source has marked itself busy. The source owns
+// and frees it when the stream is released.
+class MockRtmpReleaseBridge : public ISrsStreamBridge
+{
+public:
+    MockRtmpReleaseBridge() {
+    }
+    virtual srs_error_t initialize(SrsRequest* /*r*/) {
+        return srs_success;
+    }
+    virtual srs_error_t on_publish() {
+        return srs_error_new(ERROR_SOCKET_CONNECT, "mock bridge publish failed");
+    }
+    virtual srs_error_t on_frame(SrsSharedPtrMessage* /*frame*/) {
+        return srs_success;
+    }
+    virtual void on_unpublish() {
+    }
+};
+
+// A publish that fails after the live source marked itself busy releases the stream, so the next publisher is
+// accepted instead of the stream staying busy until SRS restarts.
+VOID TEST(RtmpPublishTest, FailedPublishReleasesTheStream)
+{
+    srs_error_t err;
+
+    MockTakeoverConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF "vhost __defaultVhost__ { }"));
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("rtmp-release-failed"));
+    MockTakeoverServer server(req->get_stream_url());
+    SrsSharedPtr<SrsLiveSource> source;
+    HELPER_ASSERT_SUCCESS(_srs_sources->fetch_or_create(req.get(), server.server(), source));
+    source->set_bridge(new MockRtmpReleaseBridge());
+
+    SrsContextId cid = _srs_context->get_id();
+    SrsRtmpConn* first = mock_takeover_rtmp_conn(server.server(), req.get());
+    std::string first_id = _srs_context->get_id().c_str();
+    err = first->publishing(source);
+    EXPECT_TRUE(srs_error_desc(err).find("mock bridge publish failed") != std::string::npos);
+    srs_freep(err);
+    EXPECT_TRUE(source->can_publish(false));
+    SrsStatistic::instance()->on_disconnect(first_id, srs_success);
+    srs_freep(first);
+    _srs_context->set_id(cid);
+
+    // The release freed the failing bridge with the rest of the publish, so the second publisher meets none.
+    SrsRtmpConn* second = mock_takeover_rtmp_conn(server.server(), req.get());
+    err = second->acquire_publish(source);
+    bool accepted = (err == srs_success);
+    EXPECT_TRUE(accepted) << srs_error_desc(err);
+    srs_freep(err);
+
+    // Only a publisher that was accepted releases the stream. Without the fix the stream is still busy here, so it is
+    // freed by hand for the tests that follow.
+    if (accepted) {
+        second->release_publish(source);
+    }
+    source->can_publish_ = true;
+    srs_freep(second);
+    _srs_context->set_id(cid);
+}
