@@ -658,6 +658,10 @@ public:
     // The kickoff timeout in srs_utime_t for publisher.
     virtual srs_utime_t get_publish_kickoff_for_idle(std::string vhost);
     virtual srs_utime_t get_publish_kickoff_for_idle(SrsConfDirective* vhost);
+    // Whether an RTMP publisher that the security rules and the on_publish hook let through takes over a busy stream
+    // from its current publisher, of any protocol. SRT publishers have srt.takeover instead. Off by default, because
+    // with no on_publish hook every publisher gets through.
+    virtual bool get_publish_takeover(std::string vhost);
 private:
     // Get the global chunk size.
     virtual int get_global_chunk_size();

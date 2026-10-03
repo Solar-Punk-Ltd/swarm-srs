@@ -955,10 +955,17 @@ srs_error_t SrsRtmpConn::publishing(SrsSharedPtr<SrsLiveSource> source)
         rtrd.stop();
     }
     
-    // Release and callback when acquire publishing success, if not, we should ignore, because the source
-    // is not published by this session.
-    if (acquire_err == srs_success) {
+    // Whatever the acquire result, release any publish state changed by this session, so a publish that failed
+    // after the source was marked busy does not leave the stream busy until restart. When the stream is busy, or
+    // this session was interrupted while it waited to take it over, another session owns it and must never be
+    // released here.
+    int acquire_code = srs_error_code(acquire_err);
+    if (acquire_code != ERROR_SYSTEM_STREAM_BUSY && acquire_code != ERROR_THREAD_INTERRUPED) {
         release_publish(source);
+    }
+
+    // Only notify the hook when this session acquired the stream and entered the publish lifecycle.
+    if (acquire_err == srs_success) {
         http_hooks_on_unpublish();
     }
     
@@ -1049,10 +1056,11 @@ srs_error_t SrsRtmpConn::do_publishing(SrsSharedPtr<SrsLiveSource> source, SrsPu
             kbps->sample();
             bool mr = _srs_config->get_mr_enabled(req->vhost);
             srs_utime_t mr_sleep = _srs_config->get_mr_sleep(req->vhost);
-            srs_trace("<- " SRS_CONSTS_LOG_CLIENT_PUBLISH " time=%d, okbps=%d,%d,%d, ikbps=%d,%d,%d, mr=%d/%d, p1stpt=%d, pnt=%d",
+            // The vhost comes last, so a reader of the fields before it keeps working.
+            srs_trace("<- " SRS_CONSTS_LOG_CLIENT_PUBLISH " time=%d, okbps=%d,%d,%d, ikbps=%d,%d,%d, mr=%d/%d, p1stpt=%d, pnt=%d, vhost=%s",
                 (int)pprint->age(), kbps->get_send_kbps(), kbps->get_send_kbps_30s(), kbps->get_send_kbps_5m(),
                 kbps->get_recv_kbps(), kbps->get_recv_kbps_30s(), kbps->get_recv_kbps_5m(), mr, srsu2msi(mr_sleep),
-                srsu2msi(publish_1stpkt_timeout), srsu2msi(publish_normal_timeout));
+                srsu2msi(publish_1stpkt_timeout), srsu2msi(publish_normal_timeout), req->vhost.c_str());
 
 #ifdef SRS_APM
             // TODO: Do not use pithy print for frame span.
@@ -1069,8 +1077,45 @@ srs_error_t SrsRtmpConn::do_publishing(SrsSharedPtr<SrsLiveSource> source, SrsPu
 
 srs_error_t SrsRtmpConn::acquire_publish(SrsSharedPtr<SrsLiveSource> source)
 {
+    srs_error_t err = do_acquire_publish(source);
+    if (srs_error_code(err) != ERROR_SYSTEM_STREAM_BUSY) {
+        return err;
+    }
+
+    // publishing() has already run the on_publish hook, after stream_service_cycle() ran the security check, so only
+    // a publisher they let through gets here. With the takeover on, it may replace a publisher the stream still has,
+    // such as an encoder whose network died without closing, and then try again. If the old one does not go in time,
+    // the second try refuses this one as busy, though the old one has already been told to go. An edge forwards its
+    // publishers to its origin, whose own setting decides.
+    SrsRequest* req = info->req;
+    if (info->edge || !_srs_config->get_publish_takeover(req->vhost)) {
+        return err;
+    }
+    srs_freep(err);
+
+    if ((err = srs_takeover_publisher(req, "rtmp", SRS_TAKEOVER_TIMEOUT)) != srs_success) {
+        // This connection was interrupted while it waited, so it is going and must not publish.
+        if (srs_error_code(err) == ERROR_THREAD_INTERRUPED) {
+            return srs_error_wrap(err, "rtmp: takeover");
+        }
+        srs_warn("rtmp: no takeover, %s", srs_error_desc(err).c_str());
+        srs_freep(err);
+    }
+
+    // The old publisher's source dies when it goes, and the source manager may drop it from its pool while this one
+    // waits, such as through a slow on_unpublish hook. Publishing on it then would reach no player, so refuse as busy:
+    // the encoder reconnects and fetches the source the pool now has.
+    if (_srs_sources->fetch(req).get() != source.get()) {
+        return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "rtmp: source of %s was dropped while taking over", req->get_stream_url().c_str());
+    }
+
+    return do_acquire_publish(source);
+}
+
+srs_error_t SrsRtmpConn::do_acquire_publish(SrsSharedPtr<SrsLiveSource> source)
+{
     srs_error_t err = srs_success;
-    
+
     SrsRequest* req = info->req;
 
     // Check whether RTMP stream is busy.

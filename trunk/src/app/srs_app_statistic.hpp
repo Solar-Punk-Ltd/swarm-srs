@@ -238,4 +238,15 @@ public:
 // Generate a random string id, with constant prefix.
 extern std::string srs_generate_stat_vid();
 
+// How long a publisher taking over a busy stream waits for the old one to go.
+#define SRS_TAKEOVER_TIMEOUT (5 * SRS_UTIME_SECONDS)
+
+// Expire the client that the statistics record as the publisher of req's stream, of any protocol, and wait up
+// to timeout for it to go. An RTMP or SRT client goes only after its source is released and its on_unpublish hook has
+// returned, so waiting for the client rather than for a free source keeps that on_unpublish ahead of the new publish.
+// A WebRTC client sends its on_unpublish in the background as it goes, so that hook may come after the new publish.
+// Fails when there is no other publisher on record or it does not go in time. The protocol of the new publisher, such
+// as rtmp or srt, leads its log line.
+extern srs_error_t srs_takeover_publisher(SrsRequest* req, std::string protocol, srs_utime_t timeout);
+
 #endif

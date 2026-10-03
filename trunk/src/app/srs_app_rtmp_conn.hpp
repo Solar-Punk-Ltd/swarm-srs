@@ -151,6 +151,8 @@ private:
     virtual srs_error_t publishing(SrsSharedPtr<SrsLiveSource> source);
     virtual srs_error_t do_publishing(SrsSharedPtr<SrsLiveSource> source, SrsPublishRecvThread* trd);
     virtual srs_error_t acquire_publish(SrsSharedPtr<SrsLiveSource> source);
+    // Refuses as busy while any source the publish must own has a publisher, else starts the publish.
+    virtual srs_error_t do_acquire_publish(SrsSharedPtr<SrsLiveSource> source);
     virtual void release_publish(SrsSharedPtr<SrsLiveSource> source);
     virtual srs_error_t handle_publish_message(SrsSharedPtr<SrsLiveSource>& source, SrsCommonMessage* msg);
     virtual srs_error_t process_publish_message(SrsSharedPtr<SrsLiveSource>& source, SrsCommonMessage* msg);

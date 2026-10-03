@@ -185,6 +185,21 @@ srs_error_t SrsSrtSourceManager::fetch_or_create(SrsRequest* r, SrsSharedPtr<Srs
     return err;
 }
 
+SrsSharedPtr<SrsSrtSource> SrsSrtSourceManager::fetch(SrsRequest* r)
+{
+    // Use lock to protect coroutine switch.
+    // @bug https://github.com/ossrs/srs/issues/1230
+    SrsLocker(lock);
+
+    string stream_url = r->get_stream_url();
+    std::map< std::string, SrsSharedPtr<SrsSrtSource> >::iterator it = pool.find(stream_url);
+    if (it == pool.end()) {
+        return SrsSharedPtr<SrsSrtSource>(NULL);
+    }
+
+    return it->second;
+}
+
 SrsSrtSourceManager* _srs_srt_sources = NULL;
 
 SrsSrtConsumer::SrsSrtConsumer(SrsSrtSource* s)
