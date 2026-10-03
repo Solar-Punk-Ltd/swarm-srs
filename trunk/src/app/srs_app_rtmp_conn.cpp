@@ -955,10 +955,17 @@ srs_error_t SrsRtmpConn::publishing(SrsSharedPtr<SrsLiveSource> source)
         rtrd.stop();
     }
     
-    // Release and callback when acquire publishing success, if not, we should ignore, because the source
-    // is not published by this session.
-    if (acquire_err == srs_success) {
+    // Whatever the acquire result, release any publish state changed by this session, so a publish that failed
+    // after the source was marked busy does not leave the stream busy until restart. When the stream is busy, or
+    // this session was interrupted while it waited to take it over, another session owns it and must never be
+    // released here.
+    int acquire_code = srs_error_code(acquire_err);
+    if (acquire_code != ERROR_SYSTEM_STREAM_BUSY && acquire_code != ERROR_THREAD_INTERRUPED) {
         release_publish(source);
+    }
+
+    // Only notify the hook when this session acquired the stream and entered the publish lifecycle.
+    if (acquire_err == srs_success) {
         http_hooks_on_unpublish();
     }
     
