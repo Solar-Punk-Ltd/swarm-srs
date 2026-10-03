@@ -2643,7 +2643,7 @@ srs_error_t SrsConfig::check_normal_config()
                 for (int j = 0; j < (int)conf->directives.size(); j++) {
                     string m = conf->at(j)->name;
                     if (m != "mr" && m != "mr_latency" && m != "firstpkt_timeout" && m != "normal_timeout"
-                        && m != "parse_sps" && m != "try_annexb_first" && m != "kickoff_for_idle") {
+                        && m != "parse_sps" && m != "try_annexb_first" && m != "kickoff_for_idle" && m != "takeover") {
                         return srs_error_new(ERROR_SYSTEM_CONFIG_INVALID, "illegal vhost.publish.%s of %s", m.c_str(), vhost->arg0().c_str());
                     }
                 }
@@ -5571,8 +5571,32 @@ srs_utime_t SrsConfig::get_publish_kickoff_for_idle(SrsConfDirective* vhost)
     if (!conf || conf->arg0().empty()) {
         return DEFAULT;
     }
-    
+
     return (srs_utime_t)(::atof(conf->arg0().c_str()) * SRS_UTIME_SECONDS);
+}
+
+bool SrsConfig::get_publish_takeover(string vhost)
+{
+    SRS_OVERWRITE_BY_ENV_BOOL("srs.vhost.publish.takeover"); // SRS_VHOST_PUBLISH_TAKEOVER
+
+    static bool DEFAULT = false;
+
+    SrsConfDirective* conf = get_vhost(vhost);
+    if (!conf) {
+        return DEFAULT;
+    }
+
+    conf = conf->get("publish");
+    if (!conf) {
+        return DEFAULT;
+    }
+
+    conf = conf->get("takeover");
+    if (!conf || conf->arg0().empty()) {
+        return DEFAULT;
+    }
+
+    return SRS_CONF_PREFER_FALSE(conf->arg0());
 }
 
 int SrsConfig::get_global_chunk_size()

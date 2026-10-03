@@ -4664,6 +4664,29 @@ VOID TEST(ConfigEnvTest, CheckEnvValuesVhostPublish)
         SrsSetEnvConfig(conf, kickoff_for_idle, "SRS_VHOST_PUBLISH_KICKOFF_FOR_IDLE", "30");
         EXPECT_EQ(30 * SRS_UTIME_SECONDS, conf.get_publish_kickoff_for_idle("__defaultVhost__"));
     }
+
+    // The takeover is off unless the env says on, and the env applies to every vhost, configured or not.
+    if (true) {
+        MockSrsConfig conf;
+        srs_error_t err;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { publish { normal_timeout 7000; } }"));
+        EXPECT_FALSE(conf.get_publish_takeover("v"));
+        EXPECT_FALSE(conf.get_publish_takeover("__defaultVhost__"));
+
+        SrsSetEnvConfig(conf, publish_takeover, "SRS_VHOST_PUBLISH_TAKEOVER", "on");
+        EXPECT_TRUE(conf.get_publish_takeover("v"));
+        EXPECT_TRUE(conf.get_publish_takeover("__defaultVhost__"));
+        EXPECT_TRUE(conf.get_publish_takeover("absent"));
+    }
+
+    if (true) {
+        MockSrsConfig conf;
+        srs_error_t err;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { publish { takeover on; } }"));
+
+        SrsSetEnvConfig(conf, publish_takeover, "SRS_VHOST_PUBLISH_TAKEOVER", "off");
+        EXPECT_FALSE(conf.get_publish_takeover("v"));
+    }
 }
 
 VOID TEST(ConfigEnvTest, CheckEnvValuesCircuitBreaker)

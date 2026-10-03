@@ -1521,3 +1521,21 @@ VOID TEST(AppEncoderTest, UnpublishDuringReloadStopDoesNotHold)
 }
 
 #endif
+
+VOID TEST(RtmpTakeoverTest, ConfigDefaultOffAndOn)
+{
+    srs_error_t err;
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { publish { normal_timeout 7000; } }"));
+        EXPECT_FALSE(conf.get_publish_takeover("v"));
+        EXPECT_FALSE(conf.get_publish_takeover("absent"));
+    }
+
+    if (true) {
+        MockSrsConfig conf;
+        HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost v { publish { takeover on; } }"));
+        EXPECT_TRUE(conf.get_publish_takeover("v"));
+    }
+}
