@@ -1539,6 +1539,27 @@ void mock_takeover_publish(MockTakeoverPublisher* old, SrsRequest* req)
     stat->on_stream_publish(req, old->id);
 }
 
+// The take-over line names the protocol of the new publisher, so a log tells an RTMP takeover from an SRT one.
+VOID TEST(TakeoverTest, TakeOverLineNamesTheNewPublishersProtocol)
+{
+    srs_error_t err;
+
+    SrsUniquePtr<SrsRequest> rtmp(mock_takeover_request("takeover-line-rtmp"));
+    MockTakeoverPublisher rtmp_old("takeover-line-rtmp-old", false);
+    mock_takeover_publish(&rtmp_old, rtmp.get());
+
+    SrsUniquePtr<SrsRequest> srt(mock_takeover_request("takeover-line-srt"));
+    MockTakeoverPublisher srt_old("takeover-line-srt-old", false);
+    mock_takeover_publish(&srt_old, srt.get());
+
+    MockTakeoverLog log;
+    HELPER_EXPECT_SUCCESS(srs_takeover_publisher(rtmp.get(), "rtmp", SRS_TAKEOVER_TIMEOUT));
+    HELPER_EXPECT_SUCCESS(srs_takeover_publisher(srt.get(), "srt", SRS_TAKEOVER_TIMEOUT));
+
+    EXPECT_LE(0, log.find("rtmp: take over /live/takeover-line-rtmp from publisher takeover-line-rtmp-old"));
+    EXPECT_LE(0, log.find("srt: take over /live/takeover-line-srt from publisher takeover-line-srt-old"));
+}
+
 VOID TEST(RtmpTakeoverTest, ConfigDefaultOffAndOn)
 {
     srs_error_t err;
@@ -1564,14 +1585,14 @@ VOID TEST(RtmpTakeoverTest, WarnsWhenOnWithoutAPublishHook)
     srs_error_t err;
 
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost nohooks { publish { takeover on; } }"));
         EXPECT_EQ(1, log.count("publish takeover of nohooks"));
     }
 
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost hooksoff { publish { takeover on; } "
             "http_hooks { enabled off; on_publish http://127.0.0.1:8085/api/v1/streams; } }"));
@@ -1579,7 +1600,7 @@ VOID TEST(RtmpTakeoverTest, WarnsWhenOnWithoutAPublishHook)
     }
 
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost nourl { publish { takeover on; } "
             "http_hooks { enabled on; on_publish; } }"));
@@ -1588,7 +1609,7 @@ VOID TEST(RtmpTakeoverTest, WarnsWhenOnWithoutAPublishHook)
 
     // A vhost with both takeovers on and no hook is warned about once for each.
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost both { publish { takeover on; } "
             "srt { enabled on; takeover on; } }"));
@@ -1597,7 +1618,7 @@ VOID TEST(RtmpTakeoverTest, WarnsWhenOnWithoutAPublishHook)
     }
 
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost hooked { publish { takeover on; } "
             "http_hooks { enabled on; on_publish http://127.0.0.1:8085/api/v1/streams; } } "

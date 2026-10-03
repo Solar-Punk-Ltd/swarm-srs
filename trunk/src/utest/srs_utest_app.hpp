@@ -88,19 +88,21 @@ public:
 extern SrsRequest* mock_takeover_request(std::string stream);
 extern void mock_takeover_publish(MockTakeoverPublisher* old, SrsRequest* req);
 
-// Keeps the warnings logged while it is installed.
-class MockTakeoverWarnLog : public ISrsLog
+// Keeps what is logged while it is installed: the warnings, and every line of every level in order, each led by the
+// id of the context that logged it.
+class MockTakeoverLog : public ISrsLog
 {
 public:
     std::vector<std::string> warnings;
+    std::vector<std::string> lines;
 private:
     ISrsLog* saved_;
 public:
-    MockTakeoverWarnLog() {
+    MockTakeoverLog() {
         saved_ = _srs_log;
         _srs_log = this;
     }
-    virtual ~MockTakeoverWarnLog() {
+    virtual ~MockTakeoverLog() {
         _srs_log = saved_;
     }
     virtual srs_error_t initialize() {
@@ -108,14 +110,15 @@ public:
     }
     virtual void reopen() {
     }
-    virtual void log(SrsLogLevel level, const char* /*tag*/, const SrsContextId& /*context_id*/, const char* fmt, va_list args) {
-        if (level != SrsLogLevelWarn) {
-            return;
-        }
+    virtual void log(SrsLogLevel level, const char* /*tag*/, const SrsContextId& context_id, const char* fmt, va_list args) {
         char buf[1024];
         vsnprintf(buf, sizeof(buf), fmt, args);
-        warnings.push_back(buf);
+        lines.push_back(std::string("[") + context_id.c_str() + "] " + buf);
+        if (level == SrsLogLevelWarn) {
+            warnings.push_back(buf);
+        }
     }
+    // The number of warnings that contain text.
     int count(std::string text) {
         int n = 0;
         for (int i = 0; i < (int)warnings.size(); i++) {
@@ -124,6 +127,15 @@ public:
             }
         }
         return n;
+    }
+    // The position of the first line, of any level, that contains text, or -1 when none does.
+    int find(std::string text) {
+        for (int i = 0; i < (int)lines.size(); i++) {
+            if (lines[i].find(text) != std::string::npos) {
+                return i;
+            }
+        }
+        return -1;
     }
 };
 

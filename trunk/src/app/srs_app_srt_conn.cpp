@@ -375,40 +375,6 @@ srs_error_t SrsMpegtsSrtConn::playing()
     return err;
 }
 
-// How long a publisher taking over a busy stream waits for the old one to go.
-#define SRS_SRT_TAKEOVER_TIMEOUT (5 * SRS_UTIME_SECONDS)
-
-srs_error_t srs_srt_takeover_publisher(SrsRequest* req, srs_utime_t timeout)
-{
-    SrsStatistic* stat = SrsStatistic::instance();
-    SrsStatisticStream* stream = stat->find_stream_by_url(req->get_stream_url());
-    if (!stream || stream->publisher_id.empty() || stream->publisher_id == _srs_context->get_id().c_str()) {
-        return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "no other publisher of %s on record", req->get_stream_url().c_str());
-    }
-
-    // A publisher whose stream is already closed is leaving: wait for it rather than interrupt its teardown. An SRT
-    // publisher closes the stream before it stops anything, an RTMP one only after its hub has stopped.
-    std::string id = stream->publisher_id;
-    SrsStatisticClient* client = stat->find_client(id);
-    if (client && client->conn && stream->active) {
-        srs_trace("srt: take over %s from publisher %s", req->get_stream_url().c_str(), id.c_str());
-        client->conn->expire();
-    }
-
-    srs_utime_t deadline = srs_update_system_time() + timeout;
-    while (stat->find_client(id)) {
-        if (srs_update_system_time() >= deadline) {
-            return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "publisher %s of %s did not go in %dms", id.c_str(), req->get_stream_url().c_str(), srsu2msi(timeout));
-        }
-        // An interrupted sleep means the caller's own connection is going, so it must not publish.
-        if (srs_usleep(10 * SRS_UTIME_MILLISECONDS) != 0) {
-            return srs_error_new(ERROR_THREAD_INTERRUPED, "interrupted while waiting for publisher %s of %s", id.c_str(), req->get_stream_url().c_str());
-        }
-    }
-
-    return srs_success;
-}
-
 // TODO: FIXME: It's not atomic and has risk between multiple source checking.
 srs_error_t SrsMpegtsSrtConn::acquire_publish()
 {
@@ -421,7 +387,7 @@ srs_error_t SrsMpegtsSrtConn::acquire_publish()
     if (_srs_config->get_srt_takeover(req_->vhost)) {
         SrsSharedPtr<SrsLiveSource> live = _srs_sources->fetch(req_);
         if (!srt_source_->can_publish() || (live.get() && !live->can_publish(false))) {
-            if ((err = srs_srt_takeover_publisher(req_, SRS_SRT_TAKEOVER_TIMEOUT)) != srs_success) {
+            if ((err = srs_takeover_publisher(req_, "srt", SRS_TAKEOVER_TIMEOUT)) != srs_success) {
                 // This connection was interrupted while it waited, so it is going and must not publish.
                 if (srs_error_code(err) == ERROR_THREAD_INTERRUPED) {
                     return srs_error_wrap(err, "srt: takeover");

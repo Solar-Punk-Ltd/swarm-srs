@@ -13,6 +13,7 @@ using namespace std;
 #include <srs_protocol_rtmp_stack.hpp>
 #include <srs_protocol_json.hpp>
 #include <srs_protocol_kbps.hpp>
+#include <srs_protocol_st.hpp>
 #include <srs_app_conn.hpp>
 #include <srs_app_config.hpp>
 #include <srs_kernel_error.hpp>
@@ -800,5 +801,36 @@ srs_error_t SrsStatistic::dumps_metrics(int64_t& send_bytes, int64_t& recv_bytes
     nerrs = nb_errs_;
 
     return err;
+}
+
+srs_error_t srs_takeover_publisher(SrsRequest* req, string protocol, srs_utime_t timeout)
+{
+    SrsStatistic* stat = SrsStatistic::instance();
+    SrsStatisticStream* stream = stat->find_stream_by_url(req->get_stream_url());
+    if (!stream || stream->publisher_id.empty() || stream->publisher_id == _srs_context->get_id().c_str()) {
+        return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "no other publisher of %s on record", req->get_stream_url().c_str());
+    }
+
+    // A publisher whose stream is already closed is leaving: wait for it rather than interrupt its teardown. An SRT
+    // publisher closes the stream before it stops anything, an RTMP one only after its hub has stopped.
+    std::string id = stream->publisher_id;
+    SrsStatisticClient* client = stat->find_client(id);
+    if (client && client->conn && stream->active) {
+        srs_trace("%s: take over %s from publisher %s", protocol.c_str(), req->get_stream_url().c_str(), id.c_str());
+        client->conn->expire();
+    }
+
+    srs_utime_t deadline = srs_update_system_time() + timeout;
+    while (stat->find_client(id)) {
+        if (srs_update_system_time() >= deadline) {
+            return srs_error_new(ERROR_SYSTEM_STREAM_BUSY, "publisher %s of %s did not go in %dms", id.c_str(), req->get_stream_url().c_str(), srsu2msi(timeout));
+        }
+        // An interrupted sleep means the caller's own connection is going, so it must not publish.
+        if (srs_usleep(10 * SRS_UTIME_MILLISECONDS) != 0) {
+            return srs_error_new(ERROR_THREAD_INTERRUPED, "interrupted while waiting for publisher %s of %s", id.c_str(), req->get_stream_url().c_str());
+        }
+    }
+
+    return srs_success;
 }
 

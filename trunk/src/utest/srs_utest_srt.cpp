@@ -588,14 +588,14 @@ VOID TEST(SrtTakeoverTest, WarnsWhenOnWithoutAPublishHook)
     srs_error_t err;
 
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost nohooks { srt { enabled on; takeover on; } }"));
         EXPECT_EQ(1, log.count("takeover of nohooks"));
     }
 
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost hooksoff { srt { enabled on; takeover on; } "
             "http_hooks { enabled off; on_publish http://127.0.0.1:8085/api/v1/streams; } }"));
@@ -603,7 +603,7 @@ VOID TEST(SrtTakeoverTest, WarnsWhenOnWithoutAPublishHook)
     }
 
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost nourl { srt { enabled on; takeover on; } "
             "http_hooks { enabled on; on_publish; } }"));
@@ -611,7 +611,7 @@ VOID TEST(SrtTakeoverTest, WarnsWhenOnWithoutAPublishHook)
     }
 
     if (true) {
-        MockTakeoverWarnLog log;
+        MockTakeoverLog log;
         MockSrsConfig conf;
         HELPER_ASSERT_SUCCESS(conf.parse(_MIN_OK_CONF "vhost hooked { srt { enabled on; takeover on; } "
             "http_hooks { enabled on; on_publish http://127.0.0.1:8085/api/v1/streams; } } "
@@ -630,7 +630,7 @@ VOID TEST(SrtTakeoverTest, ExpiresThePublisherAndWaitsForIt)
     MockTakeoverPublisher old("takeover-old-1", false);
     mock_takeover_publish(&old, req.get());
 
-    HELPER_EXPECT_SUCCESS(srs_srt_takeover_publisher(req.get(), 5 * SRS_UTIME_SECONDS));
+    HELPER_EXPECT_SUCCESS(srs_takeover_publisher(req.get(), "srt", 5 * SRS_UTIME_SECONDS));
 
     // The old publisher leaves only from its own coroutine, so finding it gone shows the takeover waited for it.
     EXPECT_TRUE(old.expired);
@@ -649,7 +649,7 @@ VOID TEST(SrtTakeoverTest, WaitsForALeavingPublisherWithoutExpiringIt)
     SrsStatistic::instance()->on_stream_close(req.get());
     old.leave_soon();
 
-    HELPER_EXPECT_SUCCESS(srs_srt_takeover_publisher(req.get(), 5 * SRS_UTIME_SECONDS));
+    HELPER_EXPECT_SUCCESS(srs_takeover_publisher(req.get(), "srt", 5 * SRS_UTIME_SECONDS));
 
     EXPECT_FALSE(old.expired);
     EXPECT_TRUE(SrsStatistic::instance()->find_client(old.id) == NULL);
@@ -665,7 +665,7 @@ VOID TEST(SrtTakeoverTest, RefusesWhenThePublisherDoesNotGo)
     mock_takeover_publish(&old, req.get());
 
     srs_utime_t starttime = srs_update_system_time();
-    HELPER_EXPECT_FAILED(srs_srt_takeover_publisher(req.get(), 100 * SRS_UTIME_MILLISECONDS));
+    HELPER_EXPECT_FAILED(srs_takeover_publisher(req.get(), "srt", 100 * SRS_UTIME_MILLISECONDS));
     srs_utime_t elapsed = srs_update_system_time() - starttime;
 
     EXPECT_TRUE(old.expired);
@@ -706,7 +706,7 @@ VOID TEST(SrtTakeoverTest, TheBoundIsRealTime)
     HELPER_ASSERT_SUCCESS(trd.start());
 
     srs_utime_t starttime = srs_update_system_time();
-    HELPER_EXPECT_FAILED(srs_srt_takeover_publisher(req.get(), 100 * SRS_UTIME_MILLISECONDS));
+    HELPER_EXPECT_FAILED(srs_takeover_publisher(req.get(), "srt", 100 * SRS_UTIME_MILLISECONDS));
     srs_utime_t elapsed = srs_update_system_time() - starttime;
     busy.quit = true;
 
@@ -728,7 +728,7 @@ public:
         srs_freep(result);
     }
     virtual srs_error_t cycle() {
-        result = srs_srt_takeover_publisher(req, 5 * SRS_UTIME_SECONDS);
+        result = srs_takeover_publisher(req, "srt", 5 * SRS_UTIME_SECONDS);
         done = true;
         return srs_success;
     }
@@ -764,7 +764,7 @@ VOID TEST(SrtTakeoverTest, RefusesWithoutAPublisher)
     srs_error_t err;
 
     SrsUniquePtr<SrsRequest> req(mock_takeover_request("takeover-none"));
-    HELPER_EXPECT_FAILED(srs_srt_takeover_publisher(req.get(), 100 * SRS_UTIME_MILLISECONDS));
+    HELPER_EXPECT_FAILED(srs_takeover_publisher(req.get(), "srt", 100 * SRS_UTIME_MILLISECONDS));
 }
 
 // acquire_publish takes a busy stream over only when the takeover is on, and still refuses with the old code while
