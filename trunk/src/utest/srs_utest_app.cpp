@@ -1522,6 +1522,23 @@ VOID TEST(AppEncoderTest, UnpublishDuringReloadStopDoesNotHold)
 
 #endif
 
+SrsRequest* mock_takeover_request(std::string stream)
+{
+    SrsRequest* req = new SrsRequest();
+    req->vhost = "__defaultVhost__";
+    req->app = "live";
+    req->stream = stream;
+    return req;
+}
+
+void mock_takeover_publish(MockTakeoverPublisher* old, SrsRequest* req)
+{
+    SrsStatistic* stat = SrsStatistic::instance();
+    srs_error_t err = stat->on_client(old->id, req, old, SrsSrtConnPublish);
+    srs_freep(err);
+    stat->on_stream_publish(req, old->id);
+}
+
 VOID TEST(RtmpTakeoverTest, ConfigDefaultOffAndOn)
 {
     srs_error_t err;
