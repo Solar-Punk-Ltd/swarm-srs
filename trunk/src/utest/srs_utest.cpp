@@ -99,6 +99,15 @@ srs_error_t prepare_main() {
 // Free global data, for address sanitizer.
 extern void srs_free_global_system_ips();
 
+#ifdef SRS_SANITIZER
+// ASan's stack-use-after-return check does not follow ST coroutines switching stacks, and stops a full run with a report
+// in the SRT event loop coroutine that ASan itself flags as a likely false positive. Turn that check off by default, so
+// a plain run finishes. ASAN_OPTIONS still overrides it.
+extern "C" const char* __asan_default_options() {
+    return "detect_stack_use_after_return=0";
+}
+#endif
+
 // We could do something in the main of utest.
 // Copy from gtest-1.6.0/src/gtest_main.cc
 GTEST_API_ int main(int argc, char **argv) {
