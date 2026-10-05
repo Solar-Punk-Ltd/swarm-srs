@@ -577,6 +577,10 @@ srs_error_t SrsRtmpConn::stream_service_cycle()
     }
     srs_assert(live_source.get() != NULL);
 
+    // From here to the publish, this coroutine yields on its client and on the on_publish hook, and the source
+    // manager's cleanup must not drop the source meanwhile.
+    SrsPendingPublisherHold pending(info->type == SrsRtmpConnPlay ? SrsSharedPtr<SrsLiveSource>() : live_source);
+
     bool enabled_cache = _srs_config->get_gop_cache(req->vhost);
     int gcmf = _srs_config->get_gop_cache_max_frames(req->vhost);
     srs_trace("source url=%s, ip=%s, cache=%d/%d, is_edge=%d, source_id=%s/%s",
