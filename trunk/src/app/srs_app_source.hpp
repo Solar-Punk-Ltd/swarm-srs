@@ -623,6 +623,10 @@ private:
 public:
     SrsPendingPublisherHold(SrsSharedPtr<SrsLiveSource> source);
     virtual ~SrsPendingPublisherHold();
+private:
+    // A copy would release the hold twice.
+    SrsPendingPublisherHold(const SrsPendingPublisherHold&);
+    SrsPendingPublisherHold& operator=(const SrsPendingPublisherHold&);
 };
 
 #endif

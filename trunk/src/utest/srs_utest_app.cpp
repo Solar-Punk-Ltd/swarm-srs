@@ -2186,7 +2186,10 @@ VOID TEST(AppSourceTest, PendingPublisherKeepsItsSourceInThePool)
 
     if (true) {
         SrsPendingPublisherHold player((SrsSharedPtr<SrsLiveSource>()));
+        EXPECT_TRUE(source->stream_is_dead());
+
         SrsPendingPublisherHold publisher(source);
+        EXPECT_FALSE(source->stream_is_dead());
         HELPER_ASSERT_SUCCESS(_srs_sources->notify(0, 0, 0));
         EXPECT_TRUE(_srs_sources->fetch(req.get()).get() == source.get());
     }
