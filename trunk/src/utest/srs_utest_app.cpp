@@ -2169,3 +2169,28 @@ VOID TEST(RtmpPublishTest, FailedPublishReleasesTheStream)
     srs_freep(second);
     _srs_context->set_id(cid);
 }
+
+// A new source with no publisher yet is dead to the cleanup timer, so a publisher that fetched it and then waited on
+// its client or its on_publish hook published into a source no player could find, and every player got a second, empty
+// source (ossrs/srs#4755). The hold keeps the source in the pool until the publisher is done with it.
+VOID TEST(AppSourceTest, PendingPublisherKeepsItsSourceInThePool)
+{
+    srs_error_t err;
+
+    MockTakeoverConfig mc;
+    HELPER_ASSERT_SUCCESS(mc.conf.parse(_MIN_OK_CONF));
+    SrsUniquePtr<SrsRequest> req(mock_takeover_request("pending-publisher-hold"));
+    MockTakeoverServer server(req->get_stream_url());
+    SrsSharedPtr<SrsLiveSource> source;
+    HELPER_ASSERT_SUCCESS(_srs_sources->fetch_or_create(req.get(), server.server(), source));
+
+    if (true) {
+        SrsPendingPublisherHold player((SrsSharedPtr<SrsLiveSource>()));
+        SrsPendingPublisherHold publisher(source);
+        HELPER_ASSERT_SUCCESS(_srs_sources->notify(0, 0, 0));
+        EXPECT_TRUE(_srs_sources->fetch(req.get()).get() == source.get());
+    }
+
+    HELPER_ASSERT_SUCCESS(_srs_sources->notify(0, 0, 0));
+    EXPECT_TRUE(_srs_sources->fetch(req.get()).get() == NULL);
+}

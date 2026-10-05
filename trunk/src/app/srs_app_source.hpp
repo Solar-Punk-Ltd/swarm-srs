@@ -534,6 +534,9 @@ private:
     srs_utime_t stream_die_at_;
     // The last idle time, while idle means no players.
     srs_utime_t publisher_idle_at_;
+    // Connections that fetched this source to publish on it and have not finished publishing yet. While any does,
+    // the source stays in the pool, or a publisher that waits on its hook would publish into a source no player finds.
+    int pending_publishers_;
 public:
     SrsLiveSource();
     virtual ~SrsLiveSource();
@@ -542,6 +545,9 @@ public:
     virtual srs_error_t cycle();
     // Whether stream is dead, which is no publisher or player.
     virtual bool stream_is_dead();
+    // Hold this source in the pool for a connection that is going to publish on it, until it lets go.
+    void hold_for_publisher();
+    void release_for_publisher();
     // Whether publisher is idle for a period of timeout.
     bool publisher_is_idle_for(srs_utime_t timeout);
 public:
@@ -606,6 +612,17 @@ public:
     virtual void on_edge_proxy_unpublish();
 public:
     virtual std::string get_curr_origin();
+};
+
+// Holds a source in its manager's pool for a connection that is going to publish on it, from the fetch until the
+// connection is done with it. An empty source holds nothing, which is what a player passes.
+class SrsPendingPublisherHold
+{
+private:
+    SrsSharedPtr<SrsLiveSource> source_;
+public:
+    SrsPendingPublisherHold(SrsSharedPtr<SrsLiveSource> source);
+    virtual ~SrsPendingPublisherHold();
 };
 
 #endif

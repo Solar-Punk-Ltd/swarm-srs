@@ -1890,6 +1890,7 @@ SrsLiveSource::SrsLiveSource()
     can_publish_ = true;
     stream_die_at_ = 0;
     publisher_idle_at_ = 0;
+    pending_publishers_ = 0;
 
     handler = NULL;
     bridge_ = NULL;
@@ -1959,6 +1960,12 @@ bool SrsLiveSource::stream_is_dead()
     if (!can_publish_ || !publish_edge->can_publish()) {
         return false;
     }
+
+    // A publisher fetched it and has not started yet, while its on_publish hook runs or its client is slow. Upstream
+    // fixed the same removal in SRS 7, see https://github.com/ossrs/srs/issues/4755
+    if (pending_publishers_ > 0) {
+        return false;
+    }
     
     // has any consumers?
     if (!consumers.empty()) {
@@ -1975,8 +1982,34 @@ bool SrsLiveSource::stream_is_dead()
     if (hub && now < stream_die_at_ + hub->cleanup_delay()) {
         return false;
     }
-    
+
     return true;
+}
+
+void SrsLiveSource::hold_for_publisher()
+{
+    pending_publishers_++;
+}
+
+void SrsLiveSource::release_for_publisher()
+{
+    if (pending_publishers_ > 0) {
+        pending_publishers_--;
+    }
+}
+
+SrsPendingPublisherHold::SrsPendingPublisherHold(SrsSharedPtr<SrsLiveSource> source) : source_(source)
+{
+    if (source_.get()) {
+        source_->hold_for_publisher();
+    }
+}
+
+SrsPendingPublisherHold::~SrsPendingPublisherHold()
+{
+    if (source_.get()) {
+        source_->release_for_publisher();
+    }
 }
 
 bool SrsLiveSource::publisher_is_idle_for(srs_utime_t timeout)
