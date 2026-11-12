@@ -1,6 +1,7 @@
 name: "Swarm image"
 
-# Builds the root Dockerfile for linux/amd64 and pushes it to the GitHub container registry.
+# Builds the root Dockerfile for linux/amd64 and linux/arm64, the arm64 build under QEMU on the amd64 runner,
+# and pushes both under one tag to the GitHub container registry.
 # It runs only when started by hand, so no push or tag starts it. Upstream's release.yml beside it, which
 # starts on any pushed tag that matches v6*, is disabled in this repository's Actions settings.
 on:
@@ -43,6 +44,12 @@ jobs:
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      # The same action as release.yml. Its binfmt image, which installs the arm64 emulator, is pinned by digest.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Login to the GitHub container registry
@@ -52,10 +59,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # The same configure flags as the official release in release.yml. The Dockerfile copies ffmpeg out of
-      # the build image, so pinning that image's index by digest keeps ffmpeg the same on every build.
+      # the build image, so pinning that image's index by digest keeps ffmpeg the same on every build. That index
+      # carries linux/amd64 and linux/arm64, so each platform builds from its own variant.
       - name: Build and push the image
         run: |
-          docker buildx build --platform linux/amd64 \
+          docker buildx build --platform linux/amd64,linux/arm64 \
             --output "type=image,push=true" \
             --metadata-file metadata.json \
             -t $IMAGE:$INPUT_TAG -t $IMAGE:sha-$SHORT_SHA \
